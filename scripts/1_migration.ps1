@@ -10,6 +10,9 @@ param(
     [Parameter(Mandatory=$false)]
     [string]$CsvPath = "repos.csv",
 
+    [string]$SshUser = $env:SSH_USER,
+    [string]$SshPrivateKeyPath = $env:SSH_PRIVATE_KEY_PATH
+
     [Parameter(Mandatory=$false)]
     [string]$OutputPath = ""
 )
@@ -129,9 +132,9 @@ while ($queue.Count -gt 0 -or $inProgress.Count -gt 0) {
                     --bbs-repo $bbsRepoSlug `
                     --github-org $githubOrg `
                     --github-repo $githubRepo `
-                    --use-github-storage `
-                    --ssh-user yashtnaik `
-                    --ssh-private-key server.pub"
+                    --use-github-storage `    
+                    --ssh-user $SshUser `
+                    --ssh-private-key $SshPrivateKeyPath `
                     --target-repo-visibility $visibility *>&1 | Tee-Object -FilePath $logFile -Append | Out-Null
 
                 $exit = $LASTEXITCODE
