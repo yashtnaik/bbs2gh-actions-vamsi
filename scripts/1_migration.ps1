@@ -11,7 +11,7 @@ param(
     [string]$CsvPath = "repos.csv",
 
     [string]$SshUser = $env:SSH_USER,
-    [string]$SshPrivateKeyPath = $env:SSH_PRIVATE_KEY_PATH
+    [string]$SshPrivateKeyPath = $env:SSH_PRIVATE_KEY
 
     [Parameter(Mandatory=$false)]
     [string]$OutputPath = ""
