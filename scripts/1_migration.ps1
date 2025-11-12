@@ -114,6 +114,7 @@ while ($queue.Count -gt 0 -or $inProgress.Count -gt 0) {
                     "--bbs-repo `"$bbsRepoSlug`"",
                     "--github-org `"$githubOrg`"",
                     "--github-repo `"$githubRepo`"",
+                    "--use-github-storage",
                     "--target-repo-visibility `"$visibility`""
                 ) -join " "
 
@@ -126,6 +127,7 @@ while ($queue.Count -gt 0 -or $inProgress.Count -gt 0) {
                     --bbs-repo $bbsRepoSlug `
                     --github-org $githubOrg `
                     --github-repo $githubRepo `
+                    --use-github-storage `
                     --target-repo-visibility $visibility *>&1 | Tee-Object -FilePath $logFile -Append | Out-Null
 
                 $exit = $LASTEXITCODE
