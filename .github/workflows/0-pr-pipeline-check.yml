@@ -16,7 +16,7 @@ on:
           - 'true'
           - 'false'
       bbs_base_url:
-        description: 'Bitbucket Server/DC base URLz'
+        description: 'Bitbucket Server/DC base URL (e.g., https://bitbucket.example.com)'
         required: true
         type: string
 
@@ -32,7 +32,6 @@ jobs:
     outputs:
       check-passed: ${{ steps.check-result.outputs.passed }}
       has-blockers: ${{ steps.check-result.outputs.has-blockers }}
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -55,7 +54,7 @@ jobs:
 
           $ErrorActionPreference = 'Continue'
 
-          # Capture the output (incl. errors) from the PS script
+          # Run your script from the repo
           $output = & .\scripts\0_pr_pipeline_check.ps1 -CsvPath "${{ inputs.csv_path }}" 2>&1
           $output | ForEach-Object { Write-Host $_ }
 
@@ -113,7 +112,7 @@ The readiness check has been completed for repositories in: ``$csvPath``
 ### Validation Checks Performed:
 - ✅ **Open Pull Requests**: Detected via `/pull-requests?state=OPEN` (paged).
 - ✅ **Running Builds** (pipeline proxy): Detected via commit build status on latest default-branch commit.
-- ✅ **Archived Repositories**: Skipped/flagged if found.
+- ✅ **Archived Repositories**: Flagged if found.
 
 ### Recommendation
 $recommendation
@@ -161,10 +160,8 @@ The migration workflow will be automatically triggered after this check complete
 
   trigger-migration:
     needs: readiness-check
-    if: >
-      github.event.inputs.trigger_migration == 'true' &&
-      needs.readiness-check.outputs.check-passed == 'true' &&
-      needs.readiness-check.outputs.has-blockers == 'false'
+    # ✅ Single-line if and bracket notation for outputs with hyphens
+    if: ${{ github.event.inputs.trigger_migration == 'true' && needs.readiness-check.outputs['check-passed'] == 'true' && needs.readiness-check.outputs['has-blockers'] == 'false' }}
     runs-on: ubuntu-latest
     steps:
       - name: Trigger Migration Workflow
