@@ -11,9 +11,12 @@ on:
         description: 'Automatically trigger migration after successful check?'
         required: false
         default: 'false'
-        type: boolean
+        type: choice
+        options:
+          - 'true'
+          - 'false'
       bbs_base_url:
-        description: 'Bitbucket Server/DC base URL'
+        description: 'Bitbucket Server/DC base URL (e.g., https://bitbucket.example.com)'
         required: true
         type: string
 
@@ -49,17 +52,13 @@ jobs:
           Write-Host " Bitbucket Server/DC Pipeline Readiness Check     " -ForegroundColor Cyan
           Write-Host "==================================================" -ForegroundColor Cyan
           Write-Host ""
-
           $ErrorActionPreference = 'Continue'
-
           # Run the PS script from repo
           $output = & .\scripts\0_pr_pipeline_check.ps1 -CsvPath "${{ inputs.csv_path }}" 2>&1
           $output | ForEach-Object { Write-Host $_ }
-
           # Detect blockers using console markers from the script
           $outputString = $output | Out-String
           $hasBlockers = $outputString -match '\[BLOCKER\]'
-
           if ($hasBlockers) {
             Write-Host "`n❌ BLOCKERS FOUND - Migration should not proceed" -ForegroundColor Red
             echo "READINESS_CHECK_PASSED=false" >> $env:GITHUB_ENV
@@ -69,7 +68,6 @@ jobs:
             echo "READINESS_CHECK_PASSED=true" >> $env:GITHUB_ENV
             echo "HAS_BLOCKERS=false" >> $env:GITHUB_ENV
           }
-
       - name: Set Check Result Output
         id: check-result
         shell: pwsh
@@ -83,7 +81,6 @@ jobs:
           } else {
             Write-Host "::notice::Readiness check passed! You can proceed with migration."
           }
-
       - name: Upload precheck outputs
         if: always()
         uses: actions/upload-artifact@v4
@@ -102,17 +99,14 @@ jobs:
           $triggerMigration = "${{ inputs.trigger_migration }}"
           $csvPath = "${{ inputs.csv_path }}"
           $bbsUrl = "${{ inputs.bbs_base_url }}"
-
           # Write summary line-by-line (no here-strings, no backticks)
           Add-Content $env:GITHUB_STEP_SUMMARY '# 🔎 Bitbucket Pipeline Readiness Check Results'
           Add-Content $env:GITHUB_STEP_SUMMARY ''
-
           if ($passed -eq 'true' -and $hasBlockers -eq 'false') {
             Add-Content $env:GITHUB_STEP_SUMMARY '## Overall Status: 🟢 PASSED'
           } else {
             Add-Content $env:GITHUB_STEP_SUMMARY '## Overall Status: 🔴 FAILED'
           }
-
           Add-Content $env:GITHUB_STEP_SUMMARY ''
           Add-Content $env:GITHUB_STEP_SUMMARY ("For repositories in: ``" + $csvPath + "``")
           Add-Content $env:GITHUB_STEP_SUMMARY ''
@@ -121,7 +115,6 @@ jobs:
           Add-Content $env:GITHUB_STEP_SUMMARY '- ✅ Running Builds on latest default-branch commit (Bitbucket build status)'
           Add-Content $env:GITHUB_STEP_SUMMARY '- ✅ Archived Repositories'
           Add-Content $env:GITHUB_STEP_SUMMARY ''
-
           if ($passed -eq 'true' -and $hasBlockers -eq 'false') {
             Add-Content $env:GITHUB_STEP_SUMMARY '### Recommendation'
             Add-Content $env:GITHUB_STEP_SUMMARY '**You can safely proceed with the migration.**'
@@ -136,13 +129,11 @@ jobs:
             Add-Content $env:GITHUB_STEP_SUMMARY '- Ensure default branch / latest commit are discoverable.'
             Add-Content $env:GITHUB_STEP_SUMMARY '- Re-run this check.'
           }
-
           Add-Content $env:GITHUB_STEP_SUMMARY ''
           Add-Content $env:GITHUB_STEP_SUMMARY '---'
           Add-Content $env:GITHUB_STEP_SUMMARY ("📅 **Check Date**: " + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC'))
           Add-Content $env:GITHUB_STEP_SUMMARY ("📁 **CSV File**: ``" + $csvPath + "``")
           Add-Content $env:GITHUB_STEP_SUMMARY ("🔗 **Bitbucket Base URL**: " + $bbsUrl)
-
       - name: Fail if Blockers Found (Optional)
         if: env.HAS_BLOCKERS == 'true'
         shell: pwsh
@@ -150,19 +141,12 @@ jobs:
           Write-Host "::warning::Blockers found. Workflow continues (soft gate)."
           # Uncomment to hard fail:
           # exit 1
-
   trigger-migration:
     needs: readiness-check
     runs-on: ubuntu-latest
-    if: ${{ github.event.inputs.trigger_migration && needs['readiness-check'].outputs['check-passed'] == 'true' && needs['readiness-check'].outputs['has-blockers'] == 'false' }}
     steps:
-      - name: Debug inputs (optional)
-        run: |
-          echo "trigger_migration = ${{ github.event.inputs.trigger_migration }}"
-          echo "check-passed     = ${{ needs['readiness-check'].outputs['check-passed'] }}"
-          echo "has-blockers     = ${{ needs['readiness-check'].outputs['has-blockers'] }}"
-  
-      - name: Trigger Migration Workflow
+      - name: Trigger Migration Workflow (only when passed & no blockers)
+        if: ${{ github.event.inputs.trigger_migration == 'true' && needs['readiness-check'].outputs['check-passed'] == 'true' && needs['readiness-check'].outputs['has-blockers'] == 'false' }}
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GH_PAT }}
