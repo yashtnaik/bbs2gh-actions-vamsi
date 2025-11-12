@@ -28,10 +28,11 @@ jobs:
   readiness-check:
     runs-on: windows-latest
     timeout-minutes: 45
-    environment: PAT tokens
+    environment: "PAT tokens"
     outputs:
       check-passed: ${{ steps.check-result.outputs.passed }}
       has-blockers: ${{ steps.check-result.outputs.has-blockers }}
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -160,11 +161,10 @@ The migration workflow will be automatically triggered after this check complete
 
   trigger-migration:
     needs: readiness-check
-    # ✅ Single-line if and bracket notation for outputs with hyphens
-    if: ${{ github.event.inputs.trigger_migration == 'true' && needs.readiness-check.outputs['check-passed'] == 'true' && needs.readiness-check.outputs['has-blockers'] == 'false' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger Migration Workflow
+      - name: Trigger Migration Workflow (only when passed & no blockers)
+        if: ${{ github.event.inputs.trigger_migration == 'true' && needs.readiness-check.outputs['check-passed'] == 'true' && needs.readiness-check.outputs['has-blockers'] == 'false' }}
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GH_PAT }}
