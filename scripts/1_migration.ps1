@@ -116,9 +116,9 @@ while ($queue.Count -gt 0 -or $inProgress.Count -gt 0) {
                     "--bbs-project `"$projectKey`"",
                     "--bbs-repo `"$bbsRepoSlug`"",
                     "--github-org `"$githubOrg`"",
-                    "--github-repo `"$githubRepo`"",
-                    "--ssh-user "yashtnaik"",
-                    "--ssh-private-key "server.pub"",
+                    "--github-repo `"$githubRepo`"",      
+                    "--ssh-user `"$SshUser`"",
+                    "--ssh-private-key `"$SshPrivateKeyPath`"",
                     "--use-github-storage",
                     "--target-repo-visibility `"$visibility`""
                 ) -join " "
