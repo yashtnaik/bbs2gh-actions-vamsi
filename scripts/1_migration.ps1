@@ -4,16 +4,19 @@
 # - Robust parallel Receive-Job parsing
 
 param(
-    [Parameter(Mandatory=$false)]
+    [Parameter(Mandatory = $false)]
     [int]$MaxConcurrent = 3,
 
-    [Parameter(Mandatory=$false)]
+    [Parameter(Mandatory = $false)]
     [string]$CsvPath = "repos.csv",
 
+    [Parameter(Mandatory = $false)]
     [string]$SshUser = $env:SSH_USER,
-    [string]$SshPrivateKeyPath = $env:SSH_PRIVATE_KEY
 
-    [Parameter(Mandatory=$false)]
+    [Parameter(Mandatory = $false)]
+    [string]$SshPrivateKeyPath = $env:SSH_PRIVATE_KEY,
+
+    [Parameter(Mandatory = $false)]
     [string]$OutputPath = ""
 )
 
