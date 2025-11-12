@@ -30,6 +30,11 @@ if ($MaxConcurrent -lt 1) {
     exit 1
 }
 
+# If not provided, fall back to SSH_PRIVATE_KEY_PATH env var
+if ([string]::IsNullOrWhiteSpace($SshPrivateKeyPath) -and $env:SSH_PRIVATE_KEY_PATH) {
+    $SshPrivateKeyPath = $env:SSH_PRIVATE_KEY_PATH
+}
+
 $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $outputCsvPath = if ([string]::IsNullOrWhiteSpace($OutputPath)) { "repo_migration_output-$timestamp.csv" } else { $OutputPath }
 
@@ -98,10 +103,31 @@ while ($queue.Count -gt 0 -or $inProgress.Count -gt 0) {
         Write-MigrationStatusCsv
 
         $scriptBlock = {
-            param($projectKey, $bbsRepoSlug, $githubOrg, $githubRepo, $visibility, $logFile)
+            param($projectKey, $bbsRepoSlug, $githubOrg, $githubRepo, $visibility, $logFile, $SshUser, $SshPrivateKeyPath)
+
+            function Resolve-PrivateKeyPath {
+                param([string]$KeyInput, [string]$LogFile)
+
+                # If input looks like raw key content, persist to a temp file; otherwise assume it's a file path.
+                if ($KeyInput -and ($KeyInput -match '-----BEGIN .*PRIVATE KEY-----')) {
+                    $tmpDir = $env:TEMP
+                    if (-not $tmpDir) { $tmpDir = (Get-Location).Path }
+                    $keyFile = Join-Path $tmpDir ("bbs2gh_sshkey_{0}.pem" -f (Get-Date -Format 'yyyyMMdd-HHmmssffff'))
+                    # Write raw content without adding extra newline
+                    Set-Content -Path $keyFile -Value $KeyInput -NoNewline
+                    "[{0}] [DEBUG] Wrote private key material to: {1}" -f (Get-Date), $keyFile | Tee-Object -FilePath $LogFile -Append | Out-Null
+                    return $keyFile
+                } else {
+                    # If empty, try env fallback
+                    if ([string]::IsNullOrWhiteSpace($KeyInput) -and $env:SSH_PRIVATE_KEY_PATH) {
+                        return $env:SSH_PRIVATE_KEY_PATH
+                    }
+                    return $KeyInput
+                }
+            }
 
             function Migrate-Repo {
-                param($projectKey, $bbsRepoSlug, $githubOrg, $githubRepo, $visibility, $logFile)
+                param($projectKey, $bbsRepoSlug, $githubOrg, $githubRepo, $visibility, $logFile, $SshUser, $SshPrivateKeyPath)
 
                 # Compose command for bbs2gh migrate-repo
                 $bbsUrl = $env:BBS_BASE_URL
@@ -110,23 +136,32 @@ while ($queue.Count -gt 0 -or $inProgress.Count -gt 0) {
                     return $false
                 }
 
+                # Resolve private key path (supports raw content or path)
+                $resolvedKeyPath = Resolve-PrivateKeyPath -KeyInput $SshPrivateKeyPath -LogFile $logFile
+                if ([string]::IsNullOrWhiteSpace($resolvedKeyPath) -or -not (Test-Path -Path $resolvedKeyPath)) {
+                    "[{0}] [ERROR] SSH private key path is invalid or missing: {1}" -f (Get-Date), ($resolvedKeyPath ?? '<empty>') |
+                        Tee-Object -FilePath $logFile -Append | Out-Null
+                    return $false
+                }
+
                 "[{0}] [START] Migration: {1}/{2} -> {3}/{4} (visibility: {5})" -f (Get-Date), $projectKey, $bbsRepoSlug, $githubOrg, $githubRepo, $visibility |
                     Tee-Object -FilePath $logFile -Append | Out-Null
 
-                $cmd = @(
-                    "gh bbs2gh migrate-repo",
+                # Log-only pretty string (escaped quotes only for display)
+                $cmdLog = @(
+                    'gh bbs2gh migrate-repo',
                     "--bbs-server-url `"$bbsUrl`"",
                     "--bbs-project `"$projectKey`"",
                     "--bbs-repo `"$bbsRepoSlug`"",
                     "--github-org `"$githubOrg`"",
-                    "--github-repo `"$githubRepo`"",      
+                    "--github-repo `"$githubRepo`"",
                     "--ssh-user `"$SshUser`"",
-                    "--ssh-private-key `"$SshPrivateKeyPath`"",
-                    "--use-github-storage",
+                    "--ssh-private-key `"$resolvedKeyPath`"",
+                    '--use-github-storage',
                     "--target-repo-visibility `"$visibility`""
-                ) -join " "
+                ) -join ' '
 
-                "[{0}] [DEBUG] Running: {1}" -f (Get-Date), $cmd | Tee-Object -FilePath $logFile -Append | Out-Null
+                "[{0}] [DEBUG] Running: {1}" -f (Get-Date), $cmdLog | Tee-Object -FilePath $logFile -Append | Out-Null
 
                 # Provide credentials via env (GH_PAT, BBS_USERNAME, BBS_PASSWORD)
                 & gh bbs2gh migrate-repo `
@@ -135,9 +170,9 @@ while ($queue.Count -gt 0 -or $inProgress.Count -gt 0) {
                     --bbs-repo $bbsRepoSlug `
                     --github-org $githubOrg `
                     --github-repo $githubRepo `
-                    --use-github-storage `    
+                    --use-github-storage `
                     --ssh-user $SshUser `
-                    --ssh-private-key $SshPrivateKeyPath `
+                    --ssh-private-key $resolvedKeyPath `
                     --target-repo-visibility $visibility *>&1 | Tee-Object -FilePath $logFile -Append | Out-Null
 
                 $exit = $LASTEXITCODE
@@ -152,11 +187,21 @@ while ($queue.Count -gt 0 -or $inProgress.Count -gt 0) {
                 }
             }
 
-            $ok = Migrate-Repo -projectKey $projectKey -bbsRepoSlug $bbsRepoSlug -githubOrg $githubOrg -githubRepo $githubRepo -visibility $visibility -logFile $logFile
+            $ok = Migrate-Repo `
+                -projectKey $projectKey `
+                -bbsRepoSlug $bbsRepoSlug `
+                -githubOrg $githubOrg `
+                -githubRepo $githubRepo `
+                -visibility $visibility `
+                -logFile $logFile `
+                -SshUser $SshUser `
+                -SshPrivateKeyPath $SshPrivateKeyPath
+
             return @{ MigrationSuccess = $ok }
         }
 
-        $job = Start-Job -ScriptBlock $scriptBlock -ArgumentList $projectKey, $bbsRepoSlug, $githubOrg, $githubRepo, $visibility, $logFile
+        # IMPORTANT: pass SSH params into the job
+        $job = Start-Job -ScriptBlock $scriptBlock -ArgumentList $projectKey, $bbsRepoSlug, $githubOrg, $githubRepo, $visibility, $logFile, $SshUser, $SshPrivateKeyPath
         $null = $inProgress.Add([PSCustomObject]@{ Job = $job; Repo = $repo; LogFile = $logFile; LastOutputLength = 0 })
         Show-StatusBar -queue $queue -inProgress $inProgress -migrated $migrated -failed $failed
     }
