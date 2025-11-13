@@ -171,36 +171,49 @@ function Validate-Migration {
     $msg | Tee-Object -FilePath $LOG_FILE -Append | Out-Null
   }
 
-  # --- Per-branch details for common branches ---
-  $allCommitCountsMatch = $true
-  $allLatestShasMatch   = $true
+  # --- Per-branch details and roll-ups ---
+  # Start pessimistic; flip to $true only if we have common branches AND all match
+  $allCommitCountsMatch = $false
+  $allLatestShasMatch   = $false
 
-  foreach ($branch in ($ghBranches | Where-Object { $_ -in $bbsBranches })) {
-    $ghInfo  = Get-GhCommitsInfoSafe -org $githubOrg -repo $githubRepo -branch $branch
-    $bbsInfo = Get-BbsCommitsInfo    -baseUrl $baseUrl -projectKey $bbsProjectKey -repoSlug $bbsRepoSlug -branch $branch -headers $headers
+  if ($ghExists) {
+    $commonBranches = $ghBranches | Where-Object { $_ -in $bbsBranches }
 
-    $countOk = ($ghInfo.Count -eq $bbsInfo.Count)
-    $shaOk   = ($ghInfo.Latest -eq $bbsInfo.Latest)
+    if ($commonBranches.Count -gt 0) {
+      # assume pass; flip to false on first mismatch
+      $allCommitCountsMatch = $true
+      $allLatestShasMatch   = $true
 
-    if (-not $countOk) { $allCommitCountsMatch = $false }
-    if (-not $shaOk)   { $allLatestShasMatch   = $false }
+      foreach ($branch in $commonBranches) {
+        $ghInfo  = Get-GhCommitsInfoSafe -org $githubOrg -repo $githubRepo -branch $branch
+        $bbsInfo = Get-BbsCommitsInfo    -baseUrl $baseUrl -projectKey $bbsProjectKey -repoSlug $bbsRepoSlug -branch $branch -headers $headers
 
-    $countLine = ("[{0}] Branch '{1}': {2}BBS Commits={3}{4} | {2}GitHub Commits={5}{4} | {6}" -f `
-      (Get-Date), $branch, $CYAN, $bbsInfo.Count, $RESET, $ghInfo.Count, (Status-Marker $countOk))
-    Write-Host $countLine
-    $countLine | Tee-Object -FilePath $LOG_FILE -Append | Out-Null
+        $countOk = ($ghInfo.Count -eq $bbsInfo.Count)
+        $shaOk   = ($ghInfo.Latest -eq $bbsInfo.Latest)
 
-    $shaLine =   ("[{0}] Branch '{1}': {2}BBS SHA={3}{4} | {2}GitHub SHA={5}{4} | {6}" -f `
-      (Get-Date), $branch, $CYAN, ($bbsInfo.Latest ?? ''), $RESET, ($ghInfo.Latest ?? ''), (Status-Marker $shaOk))
-    Write-Host $shaLine
-    $shaLine | Tee-Object -FilePath $LOG_FILE -Append | Out-Null
+        if (-not $countOk) { $allCommitCountsMatch = $false }
+        if (-not $shaOk)   { $allLatestShasMatch   = $false }
+
+        $countLine = ("[{0}] Branch '{1}': {2}BBS Commits={3}{4} | {2}GitHub Commits={5}{4} | {6}" -f `
+          (Get-Date), $branch, $CYAN, $bbsInfo.Count, $RESET, $ghInfo.Count, (Status-Marker $countOk))
+        Write-Host $countLine
+        $countLine | Tee-Object -FilePath $LOG_FILE -Append | Out-Null
+
+        $shaLine   = ("[{0}] Branch '{1}': {2}BBS SHA={3}{4} | {2}GitHub SHA={5}{4} | {6}" -f `
+          (Get-Date), $branch, $CYAN, ($bbsInfo.Latest ?? ''), $RESET, ($ghInfo.Latest ?? ''), (Status-Marker $shaOk))
+        Write-Host $shaLine
+        $shaLine | Tee-Object -FilePath $LOG_FILE -Append | Out-Null
+      }
+    }
+    # else: no common branches → keep rollups false
   }
+  # else: GH repo not found/inaccessible → keep rollups false
 
   $done = "[{0}] Validation complete for {1}/{2}" -f (Get-Date), $githubOrg, $githubRepo
   Write-Host $done
   $done | Tee-Object -FilePath $LOG_FILE -Append | Out-Null
 
-  # Per-repo summary row for table
+  # Per-repo summary row for table (include existence and notes)
   $summaryObj = [pscustomobject]@{
     github_org          = $githubOrg
     github_repo         = $githubRepo
@@ -211,6 +224,12 @@ function Validate-Migration {
     branch_count_match  = $branchCountOk
     commits_match_all   = $allCommitCountsMatch
     shas_match_all      = $allLatestShasMatch
+    gh_repo_exists      = $ghExists
+    gh_notes            = if ($ghExists) {
+                            if ($ghBranchCount -eq 0 -and $bbsBranchCount -gt 0) { "no branches on GH" } else { "" }
+                          } else {
+                            "repo not found or no access"
+                          }
   }
   $global:RepoSummaries.Add($summaryObj) | Out-Null
 }
@@ -265,8 +284,8 @@ function Validate-FromCSV {
 
     $rows = $global:RepoSummaries
     $md   = @()
-    $md  += "| GitHub Repo | BBS Repo | Branch Count (BBS/GH) | Branch Count Match | All Commit Counts Match | All Latest SHAs Match |"
-    $md  += "|-------------|---------|------------------------|--------------------|-------------------------|-----------------------|"
+    $md  += "| GitHub Repo | BBS Repo | Branch Count (BBS/GH) | Branch Count Match | All Commit Counts Match | All Latest SHAs Match | GH Repo Exists | Notes |"
+    $md  += "|-------------|----------|------------------------|--------------------|-------------------------|-----------------------|----------------|-------|"
     foreach ($r in $rows) {
       $repoGh = "$($r.github_org)/$($r.github_repo)"
       $repoBb = "$($r.bbs_project_key)/$($r.bbs_repo)"
@@ -274,7 +293,9 @@ function Validate-FromCSV {
       $bcOk   = if ($r.branch_count_match) { "✅" } else { "❌" }
       $ccOk   = if ($r.commits_match_all)  { "✅" } else { "❌" }
       $shaOk  = if ($r.shas_match_all)     { "✅" } else { "❌" }
-      $md    += "| $repoGh | $repoBb | $bc | $bcOk | $ccOk | $shaOk |"
+      $exists = if ($r.gh_repo_exists)     { "✅" } else { "❌" }
+      $notes  = $r.gh_notes
+      $md    += "| $repoGh | $repoBb | $bc | $bcOk | $ccOk | $shaOk | $exists | $notes |"
     }
     $md | Out-File -FilePath "validation-summary.md" -Encoding UTF8
   }
