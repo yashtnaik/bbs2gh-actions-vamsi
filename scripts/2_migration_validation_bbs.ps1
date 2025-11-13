@@ -188,4 +188,3 @@ function Validate-FromCSV {
 # Entrypoint
 if (-not $CsvPath)    { throw "CsvPath is required" }
 if (-not $BbsBaseUrl) { throw "BbsBaseUrl is required" }
-Validate-FromCSV -csvPath $CsvPath
