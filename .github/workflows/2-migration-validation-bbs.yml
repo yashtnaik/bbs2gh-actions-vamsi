@@ -24,7 +24,7 @@ function Get-BbsHeaders {
   if ($env:BBS_TOKEN) {
     return @{ Authorization = "Bearer $($env:BBS_TOKEN)" }
   }
-  throw "Provide Bitbucket credentials via BBS_TOKEN (preferred) or set BBS_AUTH_TYPE=Basic with BBS_USERNAME/BBS_PASSWORD."
+  throw "ProvideR Bitbucket credentials via BBS_TOKEN (preferred) or set BBS_AUTH_TYPE=Basic with BBS_USERNAME/BBS_PASSWORD."
 }
 
 function Compute-BbsBaseUrl([string]$repoUrl) {
