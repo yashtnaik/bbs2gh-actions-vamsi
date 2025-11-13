@@ -12,11 +12,11 @@ on:
         required: false
         default: 'mannequins.csv'
         type: string
-      trigger_reclaim:
-        description: 'Automatically trigger mannequin reclaim after validation'
-        required: false
-        default: false
-        type: boolean
+      # trigger_reclaim:
+      #   description: 'Automatically trigger mannequin reclaim after validation'
+      #   required: false
+      #   default: false
+      #   type: boolean
   
   workflow_call:
     inputs:
@@ -126,26 +126,26 @@ jobs:
           }
         shell: pwsh
   
-  trigger-reclaim:
-    name: Trigger Mannequin Reclaim
-    needs: validate-mannequins
-    if: github.event.inputs.trigger_reclaim == 'true' || inputs.trigger_reclaim == true
-    runs-on: ubuntu-latest
+  # trigger-reclaim:
+  #   name: Trigger Mannequin Reclaim
+  #   needs: validate-mannequins
+  #   if: github.event.inputs.trigger_reclaim == 'true' || inputs.trigger_reclaim == true
+  #   runs-on: ubuntu-latest
     
-    steps:
-      - name: Trigger Reclaim Workflow
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GH_PAT }}
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: '4-mannequins-reclaim.yml',
-              ref: context.ref,
-              inputs: {
-                github_org: '${{ inputs.github_org }}',
-                csv_file: '${{ inputs.output_file }}'
-              }
-            });
-            console.log('✅ Mannequin reclaim workflow triggered successfully');
+  #   steps:
+  #     - name: Trigger Reclaim Workflow
+  #       uses: actions/github-script@v7
+  #       with:
+  #         github-token: ${{ secrets.GH_PAT }}
+  #         script: |
+  #           await github.rest.actions.createWorkflowDispatch({
+  #             owner: context.repo.owner,
+  #             repo: context.repo.repo,
+  #             workflow_id: '4-mannequins-reclaim.yml',
+  #             ref: context.ref,
+  #             inputs: {
+  #               github_org: '${{ inputs.github_org }}',
+  #               csv_file: '${{ inputs.output_file }}'
+  #             }
+  #           });
+  #           console.log('✅ Mannequin reclaim workflow triggered successfully');
