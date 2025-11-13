@@ -1,4 +1,4 @@
-# BBS → GH Migration Validation Script (console-friendly output)
+# BBS → GH Migration Validation Script (console-friendly + per-repo table summary)
 # Uses ONLY the provided BbsBaseUrl for Bitbucket REST calls and ignores any host in CSV 'url'.
 # Expects CSV header with: project-key, repo, url, github_org, github_repo
 
@@ -21,6 +21,9 @@ $RESET = "`e[0m"
 Add-Type -AssemblyName System.Web
 
 $LOG_FILE = "validation-log-$(Get-Date -Format 'yyyyMMdd').txt"
+
+# NEW: global array to collect per-repo summary rows
+$global:RepoSummaries = New-Object System.Collections.Generic.List[object]
 
 function Get-BbsHeaders {
   if ($env:BBS_AUTH_TYPE -and $env:BBS_AUTH_TYPE.Trim().ToLower() -eq 'basic') {
@@ -145,12 +148,18 @@ function Validate-Migration {
   }
 
   # --- Per-branch details for common branches ---
+  $allCommitCountsMatch = $true
+  $allLatestShasMatch   = $true
+
   foreach ($branch in ($ghBranches | Where-Object { $_ -in $bbsBranches })) {
     $ghInfo  = Get-GhCommitsInfo  -org $githubOrg -repo $githubRepo -branch $branch
     $bbsInfo = Get-BbsCommitsInfo -baseUrl $baseUrl -projectKey $bbsProjectKey -repoSlug $bbsRepoSlug -branch $branch -headers $headers
 
     $countOk = ($ghInfo.Count -eq $bbsInfo.Count)
     $shaOk   = ($ghInfo.Latest -eq $bbsInfo.Latest)
+
+    if (-not $countOk) { $allCommitCountsMatch = $false }
+    if (-not $shaOk)   { $allLatestShasMatch   = $false }
 
     $countLine = ("[{0}] Branch '{1}': {2}BBS Commits={3}{4} | {2}GitHub Commits={5}{4} | {6}" -f `
       (Get-Date), $branch, $CYAN, $bbsInfo.Count, $RESET, $ghInfo.Count, (Status-Marker $countOk))
@@ -166,6 +175,20 @@ function Validate-Migration {
   $done = "[{0}] Validation complete for {1}/{2}" -f (Get-Date), $githubOrg, $githubRepo
   Write-Host $done
   $done | Tee-Object -FilePath $LOG_FILE -Append | Out-Null
+
+  # NEW: push a per-repo summary row (for table + CSV)
+  $summaryObj = [pscustomobject]@{
+    github_org          = $githubOrg
+    github_repo         = $githubRepo
+    bbs_project_key     = $bbsProjectKey
+    bbs_repo            = $bbsRepoSlug
+    branch_count_bbs    = $bbsBranchCount
+    branch_count_gh     = $ghBranchCount
+    branch_count_match  = $branchCountOk
+    commits_match_all   = $allCommitCountsMatch
+    shas_match_all      = $allLatestShasMatch
+  }
+  $global:RepoSummaries.Add($summaryObj) | Out-Null
 }
 
 function Validate-FromCSV {
@@ -210,6 +233,28 @@ function Validate-FromCSV {
   $allDone = "[{0}] All validations from CSV completed" -f (Get-Date)
   Write-Host $allDone
   $allDone | Tee-Object -FilePath $LOG_FILE -Append | Out-Null
+
+  # NEW: Write CSV + Markdown table for the summary
+  if ($global:RepoSummaries.Count -gt 0) {
+    $csvPathOut = "validation-summary.csv"
+    $global:RepoSummaries | Export-Csv -Path $csvPathOut -NoTypeInformation -Encoding UTF8
+
+    # Build Markdown table lines (also saved to file for the workflow to append to step summary)
+    $rows = $global:RepoSummaries
+    $md   = @()
+    $md  += "| GitHub Repo | BBS Repo | Branch Count (BBS/GH) | Branch Count Match | All Commit Counts Match | All Latest SHAs Match |"
+    $md  += "|-------------|---------|------------------------|--------------------|-------------------------|-----------------------|"
+    foreach ($r in $rows) {
+      $repoGh = "$($r.github_org)/$($r.github_repo)"
+      $repoBb = "$($r.bbs_project_key)/$($r.bbs_repo)"
+      $bc     = "$($r.branch_count_bbs)/$($r.branch_count_gh)"
+      $bcOk   = if ($r.branch_count_match) { "✅" } else { "❌" }
+      $ccOk   = if ($r.commits_match_all)  { "✅" } else { "❌" }
+      $shaOk  = if ($r.shas_match_all)     { "✅" } else { "❌" }
+      $md    += "| $repoGh | $repoBb | $bc | $bcOk | $ccOk | $shaOk |"
+    }
+    $md | Out-File -FilePath "validation-summary.md" -Encoding UTF8
+  }
 }
 
 # Entrypoint
