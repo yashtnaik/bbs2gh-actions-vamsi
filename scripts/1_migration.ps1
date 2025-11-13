@@ -158,7 +158,7 @@ while ($queue.Count -gt 0 -or $inProgress.Count -gt 0) {
                     "--ssh-user `"$SshUser`"",
                     "--ssh-private-key `"$resolvedKeyPath`"",
                     '--use-github-storage',
-                    '--verbose',
+                    '--target-api-url "https://api.github.com"',
                     "--target-repo-visibility `"$visibility`""
                 ) -join ' '
 
@@ -174,7 +174,7 @@ while ($queue.Count -gt 0 -or $inProgress.Count -gt 0) {
                     --use-github-storage `
                     --ssh-user $SshUser `
                     --ssh-private-key $resolvedKeyPath `
-                    --verbose `
+                    --target-api-url https://api.github.com `
                     --target-repo-visibility $visibility *>&1 | Tee-Object -FilePath $logFile -Append | Out-Null
 
                 $exit = $LASTEXITCODE
