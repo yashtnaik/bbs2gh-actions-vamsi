@@ -11,11 +11,11 @@ on:
         description: 'Optional: scope to a single BBS project key (e.g., WORK). Leave blank for all projects.'
         required: false
         type: string
-      artifact_name:
-        description: 'Artifact base name'
-        required: false
-        default: 'bbs-repos.csv'
-        type: string
+      # artifact_name:
+      #   description: 'Artifact base name'
+      #   required: false
+      #   default: 'bbs-repos.csv'
+      #   type: string
 
 permissions:
   contents: read
@@ -98,13 +98,23 @@ jobs:
             Write-Host "[WARN] Preview failed (non-CSV or large file). Proceeding with upload." -ForegroundColor Yellow
           }
 
-      - name: Upload repos.csv artifact (only)
+      # - name: Upload repos.csv artifact (only)
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: ${{ inputs.artifact_name }}-${{ github.run_number }}
+      #     path: ${{ steps.run_inventory.outputs.repo_csv_path }}
+      #     retention-days: 30
+      #     if-no-files-found: error
+      
+      - name: Upload generated reports
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.artifact_name }}-${{ github.run_number }}
-          path: ${{ steps.run_inventory.outputs.repo_csv_path }}
-          retention-days: 30
-          if-no-files-found: error
+          name: csv reports
+          path: |
+            *.csv
+          retention-days: 90
+          if-no-files-found: warn
 
       - name: Summary
         if: always()
