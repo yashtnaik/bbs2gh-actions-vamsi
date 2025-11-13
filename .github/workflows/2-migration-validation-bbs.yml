@@ -159,9 +159,9 @@ jobs:
             validation-*.json
             validation-summary.csv
             validation-summary.md
+          overwrite: true
           retention-days: 30
 
-      # ⬇️ NEW: ensure the summary contains ONLY the table
       - name: Reset Summary (table-only)
         if: always()
         shell: pwsh
