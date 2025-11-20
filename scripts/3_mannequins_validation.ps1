@@ -11,7 +11,7 @@ $ErrorActionPreference = 'Stop'
 
 Write-Host "==> Generating mannequin CSV for org '$GithubOrg'..."
 
-# Run the gh ado2gh command directly
+# Run the gh bbs2gh command directly
 $cmdOutput = & gh bbs2gh generate-mannequin-csv --github-org $GithubOrg --output $OutputFile 2>&1
 $exit = $LASTEXITCODE
 
