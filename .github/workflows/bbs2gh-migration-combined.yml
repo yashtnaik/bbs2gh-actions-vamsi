@@ -177,7 +177,7 @@ jobs:
         uses: trstringer/manual-approval@v1
         with:
           secret: ${{ github.token }}
-          approvers: your-team,alice,bob
+          approvers: yashtnaik
           minimum-approvals: 1
           issue-title: "Approve migration to GitHub"
           issue-body: |
