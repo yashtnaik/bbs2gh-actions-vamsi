@@ -18,10 +18,6 @@ on:
         default: '5'
         type: choice
         options: ['1','2','3','4','5']
-      gh_host:
-        description: '(Optional) GHES host, e.g., github.example.com'
-        required: false
-        type: string
 
 permissions:
   contents: read
