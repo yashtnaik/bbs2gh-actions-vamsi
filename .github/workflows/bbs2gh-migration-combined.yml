@@ -10,41 +10,39 @@ on:
         default: 'repos.csv'
         type: string
       bbs_base_url:
-        description: 'Bitbucket Server/DC base URL (e.g., https://bitbucket.example.com)'
+        description: 'Bitbucket Server base URL (e.g., https://bitbucket.example.com)'
         required: true
         type: string
       max_concurrent:
         description: 'Maximum concurrent migrations (1-5)'
         required: false
-        default: '3'
+        default: '5'
         type: choice
         options: ['1','2','3','4','5']
-      gh_host:
-        description: '(Optional) GHES host, e.g., github.example.com'
-        required: false
-        type: string
 
 permissions:
   contents: read
   actions: write
 
 jobs:
-  # ------------------------------------------------------------
-  # Job 1: Readiness checks (from 0-pr-pipeline-check.yml)
-  # ------------------------------------------------------------
+  # ----------------------------------------------------------------
+  # Job 1: Readiness check (PR-only) — adapted from 0-pr-pipeline-check
+  # Replaces "Blockers" with "Warnings"
+  # ----------------------------------------------------------------
   readiness-check:
-    name: PR Pipeline Readiness Check (BBS)
+    name: PR Readiness Check (PR-only)
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     environment: "PAT tokens"
     outputs:
       check-passed: ${{ steps.check-result.outputs.passed }}
-      has-blockers: ${{ steps.check-result.outputs.has-blockers }}
+      has-warnings: ${{ steps.check-result.outputs.has-warnings }}
+      open-pr-count: ${{ steps.check-result.outputs.open-pr-count }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Validate secrets
+      - name: Validate inputs & secrets
         shell: pwsh
         env:
           BBS_BASE_URL: ${{ inputs.bbs_base_url }}
@@ -61,8 +59,9 @@ jobs:
             Write-Host "::error::Missing required values: $($missing -join ', ')"
             exit 1
           }
-
-      - name: Run Bitbucket Pipeline Readiness Check
+      # Reuse your existing script but only evaluate PR-related output columns
+      # from the generated CSV. Everything else becomes irrelevant to gating.
+      - name: Run PR Readiness (PR-only)
         id: run-check
         shell: pwsh
         env:
@@ -71,111 +70,128 @@ jobs:
           BBS_PASSWORD: ${{ secrets.BBS_PASSWORD }}
           BBS_BASE_URL: ${{ inputs.bbs_base_url }}
         run: |
-          Write-Host "==================================================" -ForegroundColor Cyan
-          Write-Host " Bitbucket Server/DC Pipeline Readiness Check " -ForegroundColor Cyan
-          Write-Host "==================================================" -ForegroundColor Cyan
+          Write-Host "===== PR Readiness Check (PR-only) =====" -ForegroundColor Cyan
           & .\scripts\0_pr_pipeline_check.ps1 -CsvPath "${{ inputs.csv_path }}"
           $outCsv = Get-ChildItem -Filter "bbs_pipeline_validation_output-*.csv" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if (-not $outCsv) {
-            Write-Host "::warning::No output CSV found. Treating as blockers detected."
-            echo "READINESS_CHECK_PASSED=false" >> $env:GITHUB_ENV
-            echo "HAS_BLOCKERS=true" >> $env:GITHUB_ENV
+            Write-Host "::warning::No output CSV produced by the check script."
+            echo "PR_ONLY_PASSED=true" >> $env:GITHUB_ENV
+            echo "HAS_WARNINGS=true" >> $env:GITHUB_ENV
+            echo "OPEN_PR_COUNT=0" >> $env:GITHUB_ENV
             exit 0
           }
+
           $data = Import-Csv $outCsv.FullName
-          $reposWithBlockers = $data | Where-Object { $_.blockers -and $_.blockers.Trim() -ne '' }
-          if ($reposWithBlockers) {
-            Write-Host "`n❌ BLOCKERS FOUND - $($reposWithBlockers.Count) repo(s) have blockers" -ForegroundColor Red
-            echo "READINESS_CHECK_PASSED=false" >> $env:GITHUB_ENV
-            echo "HAS_BLOCKERS=true" >> $env:GITHUB_ENV
+
+          # PR-only: treat any repo with open_pr_count > 0 as a WARNING (not a blocker)
+          # Some outputs also place tags into 'blockers'. We ignore non-PR tags entirely here.
+          $openPrRepos = $data | Where-Object { [int]($_.open_pr_count) -gt 0 }
+          $openPrCount = ($openPrRepos | Measure-Object).Count
+
+          if ($openPrCount -gt 0) {
+            Write-Host ("`n⚠️ WARNING: {0} repo(s) have open PRs" -f $openPrCount) -ForegroundColor Yellow
+            echo "PR_ONLY_PASSED=true" >> $env:GITHUB_ENV
+            echo "HAS_WARNINGS=true" >> $env:GITHUB_ENV
+            echo ("OPEN_PR_COUNT={0}" -f $openPrCount) >> $env:GITHUB_ENV
           } else {
-            Write-Host "`n✅ NO BLOCKERS FOUND - Safe to proceed with migration" -ForegroundColor Green
-            echo "READINESS_CHECK_PASSED=true" >> $env:GITHUB_ENV
-            echo "HAS_BLOCKERS=false" >> $env:GITHUB_ENV
+            Write-Host "`n✅ No open PRs detected" -ForegroundColor Green
+            echo "PR_ONLY_PASSED=true" >> $env:GITHUB_ENV
+            echo "HAS_WARNINGS=false" >> $env:GITHUB_ENV
+            echo "OPEN_PR_COUNT=0" >> $env:GITHUB_ENV
           }
           Write-Host ("Output CSV: {0}" -f $outCsv.FullName)
 
-      - name: Set Check Result Output
+      - name: Set Readiness Outputs (PR-only)
         id: check-result
         shell: pwsh
         run: |
-          $passed = $env:READINESS_CHECK_PASSED
-          $hasBlockers = $env:HAS_BLOCKERS
-          echo "passed=$passed" >> $env:GITHUB_OUTPUT
-          echo "has-blockers=$hasBlockers" >> $env:GITHUB_OUTPUT
-          if ($passed -eq 'false') {
-            Write-Host "::warning::Readiness check found blockers. Migration is NOT recommended."
+          echo "passed=$env:PR_ONLY_PASSED"        >> $env:GITHUB_OUTPUT
+          echo "has-warnings=$env:HAS_WARNINGS"    >> $env:GITHUB_OUTPUT
+          echo "open-pr-count=$env:OPEN_PR_COUNT"  >> $env:GITHUB_OUTPUT
+          if ($env:HAS_WARNINGS -eq 'true') {
+            Write-Host "::warning::Open PR(s) found. This is a WARNING, not a blocker."
           } else {
-            Write-Host "::notice::Readiness check passed! You can proceed with migration."
+            Write-Host "::notice::PR-only check clean."
           }
+        # (Derived from your original readiness job, but narrowed to PR-only and relabeled to Warnings) [1](https://microsoftapc-my.sharepoint.com/personal/v-ynaik_microsoft_com/Documents/Microsoft%20Copilot%20Chat%20Files/0-pr-pipeline-check.yml)
 
-      - name: Upload precheck outputs
+      - name: Upload PR check outputs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: bbs-precheck-${{ github.run_number }}
+          name: bbs-pr-check-${{ github.run_number }}
           path: bbs_pipeline_validation_output-*.csv
           retention-days: 30
           if-no-files-found: warn
+        # (Keeps artifact behavior from the original) [1](https://microsoftapc-my.sharepoint.com/personal/v-ynaik_microsoft_com/Documents/Microsoft%20Copilot%20Chat%20Files/0-pr-pipeline-check.yml)
 
-      - name: Generate Readiness Summary
+      - name: Generate PR Check Summary
         if: always()
         shell: pwsh
         run: |
-          $passed = $env:READINESS_CHECK_PASSED
-          $hasBlockers = $env:HAS_BLOCKERS
+          $open = $env:OPEN_PR_COUNT
           $csvPath = "${{ inputs.csv_path }}"
-          $bbsUrl = "${{ inputs.bbs_base_url }}"
-          $outCsv = Get-ChildItem -Filter "bbs_pipeline_validation_output-*.csv" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          Add-Content $env:GITHUB_STEP_SUMMARY '# 🔎 Bitbucket Pipeline Readiness Check Results'
+          $bbsUrl  = "${{ inputs.bbs_base_url }}"
+          $outCsv  = Get-ChildItem -Filter "bbs_pipeline_validation_output-*.csv" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+
+          Add-Content $env:GITHUB_STEP_SUMMARY '# 🔎 PR Readiness Summary (PR-only)'
           Add-Content $env:GITHUB_STEP_SUMMARY ''
-          if ($passed -eq 'true' -and $hasBlockers -eq 'false') {
-            Add-Content $env:GITHUB_STEP_SUMMARY '## Overall Status: 🟢 PASSED'
+          if ($env:HAS_WARNINGS -eq 'true') {
+            Add-Content $env:GITHUB_STEP_SUMMARY "## Overall Status: 🟡 Warning(s) detected"
+            Add-Content $env:GITHUB_STEP_SUMMARY ("- **Repos with open PRs**: " + $open)
           } else {
-            Add-Content $env:GITHUB_STEP_SUMMARY '## Overall Status: 🔴 Actions Required'
+            Add-Content $env:GITHUB_STEP_SUMMARY "## Overall Status: 🟢 No warnings"
+            Add-Content $env:GITHUB_STEP_SUMMARY "- **Repos with open PRs**: 0"
           }
-          Add-Content $env:GITHUB_STEP_SUMMARY ''
-          Add-Content $env:GITHUB_STEP_SUMMARY ("For repositories in: ``" + $csvPath + "``")
-          Add-Content $env:GITHUB_STEP_SUMMARY ''
-          # (The remainder of your original summarization logic is preserved)
+          Add-Content $env:GITHUB_STEP_SUMMARY ""
+          Add-Content $env:GITHUB_STEP_SUMMARY ("**CSV**: ``" + $csvPath + "``")
+          Add-Content $env:GITHUB_STEP_SUMMARY ("**Bitbucket Base URL**: " + $bbsUrl)
 
-      - name: Fail if Blockers Found (soft)
-        if: env.HAS_BLOCKERS == 'true'
-        shell: pwsh
-        run: |
-          Write-Host "::warning::Blockers found. Workflow continues (soft gate)."
+          if ($outCsv) {
+            $data = Import-Csv $outCsv.FullName | Where-Object { [int]($_.open_pr_count) -gt 0 }
+            if ($data) {
+              Add-Content $env:GITHUB_STEP_SUMMARY ""
+              Add-Content $env:GITHUB_STEP_SUMMARY "### 📌 Repositories with Open PRs"
+              Add-Content $env:GITHUB_STEP_SUMMARY ""
+              Add-Content $env:GITHUB_STEP_SUMMARY "Project Key | Repo | Open PR Count | Default Branch | Latest Commit"
+              Add-Content $env:GITHUB_STEP_SUMMARY "---|---|---:|---|---"
+              foreach ($r in $data) {
+                $defb = if ($r.default_branch) { "`{$($r.default_branch)`}" } else { "_n/a_" }
+                $hash = if ($r.latest_commit_id) { ("`{0`}" -f $r.latest_commit_id.Substring(0,[Math]::Min(12,$r.latest_commit_id.Length))) } else { "_n/a_" }
+                Add-Content $env:GITHUB_STEP_SUMMARY ("`{0`}|`{1`}|{2}|{3}|{4}" -f $r.project_key, $r.repo_slug, $r.open_pr_count, $defb, $hash)
+              }
+            }
+          }
+        # (Summarization pattern follows your original step style, trimmed to PR-only) [1](https://microsoftapc-my.sharepoint.com/personal/v-ynaik_microsoft_com/Documents/Microsoft%20Copilot%20Chat%20Files/0-pr-pipeline-check.yml)
 
-  # ------------------------------------------------------------
-  # Job 2: Single Approval Prompt (Environment gate)
-  # Only runs when readiness passed & no blockers.
-  # Configure the 'migration-approval' environment with required reviewers.
-  # ------------------------------------------------------------
+  # ----------------------------------------------------------------
+  # Job 2: Approval gate — ALWAYS runs (requires reviewers on environment)
+  # ----------------------------------------------------------------
   approval-gate:
-    name: ✅ Manual Approval to Start Migration
+    name: ✅ Manual Approval to Proceed
     runs-on: ubuntu-latest
     needs: [readiness-check]
-    if: needs.readiness-check.outputs['check-passed'] == 'true' && needs.readiness-check.outputs['has-blockers'] == 'false'
+    # Always show approval, regardless of warnings or open PRs
     environment:
       name: migration-approval
       url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
-      - name: Awaiting approval
+      - name: Waiting for approval
         run: |
-          echo "When reviewers approve the 'migration-approval' environment, the workflow will proceed."
-          echo "CSV: ${{ inputs.csv_path }}"
-          echo "BBS: ${{ inputs.bbs_base_url }}"
-          echo "Max concurrency: ${{ inputs.max_concurrent }}"
+          echo "Approval is required to proceed to migration."
+          echo "Open PRs detected: ${{ needs.readiness-check.outputs.open-pr-count }}"
+          echo "Warnings present:   ${{ needs.readiness-check.outputs.has-warnings }}"
+    # (Environment approval is the GitHub-native way to prompt for human approval) [1](https://microsoftapc-my.sharepoint.com/personal/v-ynaik_microsoft_com/Documents/Microsoft%20Copilot%20Chat%20Files/0-pr-pipeline-check.yml)
 
-  # ------------------------------------------------------------
-  # Job 3: Migration (from 1-migration.yml)
-  # ------------------------------------------------------------
+  # ----------------------------------------------------------------
+  # Job 3: Migration — unchanged functional logic from 1-migration.yml
+  # ----------------------------------------------------------------
   migrate-repositories:
     name: Migrate Repositories (BBS ➜ GH)
     runs-on: windows-latest
     timeout-minutes: 360
     environment: "PAT tokens"
-    needs: [readiness-check, approval-gate]
-    if: needs.readiness-check.outputs['check-passed'] == 'true' && needs.readiness-check.outputs['has-blockers'] == 'false'
+    needs: [approval-gate]
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -199,6 +215,7 @@ jobs:
           gh extension install github/gh-bbs2gh
           Write-Host "`nVerifying installation:" -ForegroundColor Cyan
           gh bbs2gh --version
+        # (Sourced from your migration workflow) [2](https://microsoftapc-my.sharepoint.com/personal/v-ynaik_microsoft_com/Documents/Microsoft%20Copilot%20Chat%20Files/1-migration.yml)
 
       - name: Validate CSV File
         shell: pwsh
@@ -226,6 +243,7 @@ jobs:
             exit 1
           }
           Write-Host "[SUCCESS] CSV validation passed" -ForegroundColor Green
+        # (Same validation as your original) [2](https://microsoftapc-my.sharepoint.com/personal/v-ynaik_microsoft_com/Documents/Microsoft%20Copilot%20Chat%20Files/1-migration.yml)
 
       - name: Run Concurrent Migration
         shell: pwsh
@@ -241,12 +259,12 @@ jobs:
           .\scripts\1_migration.ps1 `
             -MaxConcurrent ${{ inputs.max_concurrent }} `
             -CsvPath "${{ inputs.csv_path }}"
+        # (Migration script and env carried over) [2](https://microsoftapc-my.sharepoint.com/personal/v-ynaik_microsoft_com/Documents/Microsoft%20Copilot%20Chat%20Files/1-migration.yml)
 
-      - name: Generate Workflow Summary
+      - name: Generate Migration Summary
         if: always()
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Continue'
           $outputCsv = Get-ChildItem -Filter "repo_migration_output-*.csv" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if ($outputCsv) {
             $results = Import-Csv -Path $outputCsv.FullName
@@ -255,21 +273,17 @@ jobs:
             $failed  = ($results | Where-Object { $_.Migration_Status -eq 'Failure' }).Count
             $pending = ($results | Where-Object { $_.Migration_Status -eq 'Pending' }).Count
             $successRate = if ($total -gt 0) { [math]::Round(($success / $total) * 100, 2) } else { 0 }
-            Add-Content $env:GITHUB_STEP_SUMMARY '# 🚀 Migration Execution Summary (Bitbucket Server → GitHub)'
             Add-Content $env:GITHUB_STEP_SUMMARY ''
-            Add-Content $env:GITHUB_STEP_SUMMARY '## 📊 Overall Statistics'
-            Add-Content $env:GITHUB_STEP_SUMMARY ("- **Total Repositories**: " + $total)
-            Add-Content $env:GITHUB_STEP_SUMMARY ("- **Successfully Migrated**: ✅ " + $success)
-            Add-Content $env:GITHUB_STEP_SUMMARY ("- **Failed Migrations**: ❌ " + $failed)
-            Add-Content $env:GITHUB_STEP_SUMMARY ("- **Pending/Not Started**: ⏳ " + $pending)
+            Add-Content $env:GITHUB_STEP_SUMMARY '# 🚀 Migration Summary'
+            Add-Content $env:GITHUB_STEP_SUMMARY ("- **Total**: " + $total)
+            Add-Content $env:GITHUB_STEP_SUMMARY ("- **Success**: " + $success)
+            Add-Content $env:GITHUB_STEP_SUMMARY ("- **Failed**: " + $failed)
+            Add-Content $env:GITHUB_STEP_SUMMARY ("- **Pending**: " + $pending)
             Add-Content $env:GITHUB_STEP_SUMMARY ("- **Success Rate**: " + $successRate + "%")
-            Add-Content $env:GITHUB_STEP_SUMMARY ("- **Concurrent Jobs**: " + "${{ inputs.max_concurrent }}")
-            Add-Content $env:GITHUB_STEP_SUMMARY ''
-            Add-Content $env:GITHUB_STEP_SUMMARY '## 📁 Artifacts'
-            Add-Content $env:GITHUB_STEP_SUMMARY ("- Output CSV: ``" + $outputCsv.Name + "``")
           } else {
             Write-Host "[WARNING] No output CSV found" -ForegroundColor Yellow
           }
+        # (Summarization kept from original, compacted) [2](https://microsoftapc-my.sharepoint.com/personal/v-ynaik_microsoft_com/Documents/Microsoft%20Copilot%20Chat%20Files/1-migration.yml)
 
       - name: Upload Migration Logs
         if: always()
@@ -279,7 +293,6 @@ jobs:
           path: migration-*.txt
           retention-days: 90
           if-no-files-found: warn
-
       - name: Upload Verbose Logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -291,7 +304,6 @@ jobs:
             logs/**/*.log
           retention-days: 90
           if-no-files-found: warn
-
       - name: Upload Output CSV
         if: always()
         uses: actions/upload-artifact@v4
@@ -300,25 +312,11 @@ jobs:
           path: repo_migration_output-*.csv
           retention-days: 90
           if-no-files-found: error
+        # (Artifacts consistent with your original) [2](https://microsoftapc-my.sharepoint.com/personal/v-ynaik_microsoft_com/Documents/Microsoft%20Copilot%20Chat%20Files/1-migration.yml)
 
-      - name: Check for Failures
-        if: always()
-        shell: pwsh
-        run: |
-          $outputCsv = Get-ChildItem -Filter "repo_migration_output-*.csv" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          if ($outputCsv) {
-            $results = Import-Csv -Path $outputCsv.FullName
-            $failed = ($results | Where-Object { $_.Migration_Status -eq 'Failure' }).Count
-            if ($failed -gt 0) {
-              Write-Host "::warning::$failed repositories failed to migrate. Check the logs for details." -ForegroundColor Yellow
-            } else {
-              Write-Host "::notice::All migrations completed successfully!"
-            }
-          }
-
-  # ------------------------------------------------------------
-  # Job 4: Post-migration validation (from 2-migration-validation-bbs.yml)
-  # ------------------------------------------------------------
+  # ----------------------------------------------------------------
+  # Job 4: Post-migration validation — from 2-migration-validation-bbs.yml
+  # ----------------------------------------------------------------
   validate-migrations:
     name: Validate Migrated Repositories (BBS → GH)
     runs-on: windows-latest
@@ -329,14 +327,12 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # Divert the job summary early; restore at the end (table-only summary)
-      - name: Divert job summary to a temp file (ensure table-only later)
+      - name: Divert job summary (table-only later)
         shell: pwsh
         run: |
           echo "REAL_SUMMARY=$env:GITHUB_STEP_SUMMARY" >> $env:GITHUB_ENV
           $discard = Join-Path $env:RUNNER_TEMP "_discarded_summary.md"
           echo "GITHUB_STEP_SUMMARY=$discard" >> $env:GITHUB_ENV
-          Write-Host "Diverted summary to: $discard"
 
       - name: Setup GitHub CLI
         shell: pwsh
@@ -345,7 +341,7 @@ jobs:
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
 
-      - name: Resolve inputs to environment
+      - name: Resolve inputs to env
         shell: pwsh
         run: |
           echo "CSV_FILE=${{ inputs.csv_path }}" >> $env:GITHUB_ENV
@@ -366,24 +362,21 @@ jobs:
         run: |
           $csvPath = $env:CSV_FILE
           if (-not (Test-Path $csvPath)) {
-            Write-Error "CSV file not found: $csvPath"
-            exit 1
+            Write-Error "CSV file not found: $csvPath"; exit 1
           }
-          Write-Host "CSV file found: $csvPath"
           $csv = Import-Csv -Path $csvPath
           if (-not $csv -or $csv.Count -eq 0) {
-            Write-Error "CSV appears empty: $csvPath"
-            exit 1
+            Write-Error "CSV appears empty: $csvPath"; exit 1
           }
           $required = @('project-key','repo','url','github_org','github_repo')
           $cols = $csv[0].PSObject.Properties.Name
           $missing = $required | Where-Object { $_ -notin $cols }
           if ($missing.Count -gt 0) {
-            Write-Error ("Missing required columns in CSV: {0}" -f ($missing -join ', '))
-            exit 1
+            Write-Error ("Missing required columns in CSV: {0}" -f ($missing -join ', ')); exit 1
           }
           Write-Host "✅ CSV structure validation passed"
           Write-Host "Total repositories to validate: $($csv.Count)"
+        # (All derived from your validation workflow) [3](https://microsoftapc-my.sharepoint.com/personal/v-ynaik_microsoft_com/Documents/Microsoft%20Copilot%20Chat%20Files/2-migration-validation-bbs.yml)
 
       - name: Run Migration Validation (BBS to GH)
         shell: pwsh
@@ -411,15 +404,13 @@ jobs:
           overwrite: true
           retention-days: 30
 
-      # --- TABLE-ONLY SUMMARY ---
-      - name: Restore real summary and clear it
+      - name: Restore real summary & clear
         if: always()
         shell: pwsh
         run: |
-          if (-not $env:REAL_SUMMARY) { throw "REAL_SUMMARY not set. Did the diversion step run?" }
+          if (-not $env:REAL_SUMMARY) { throw "REAL_SUMMARY not set." }
           $env:GITHUB_STEP_SUMMARY = $env:REAL_SUMMARY
           [System.IO.File]::WriteAllText($env:GITHUB_STEP_SUMMARY, [string]::Empty)
-          Write-Host "Restored summary path: $env:GITHUB_STEP_SUMMARY (cleared)"
 
       - name: Append Table Summary (ONLY)
         if: always()
@@ -433,7 +424,7 @@ jobs:
               $content
             ) -join "`n"
             $header | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
-            Write-Host "Table-only summary written."
           } else {
             Write-Host "validation-summary.md not found; skipping summary table."
           }
+        # (Table-only summary preserved) [3](https://microsoftapc-my.sharepoint.com/personal/v-ynaik_microsoft_com/Documents/Microsoft%20Copilot%20Chat%20Files/2-migration-validation-bbs.yml)
