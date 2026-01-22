@@ -263,27 +263,94 @@ jobs:
             -MaxConcurrent ${{ inputs.max_concurrent }} `
             -CsvPath "${{ inputs.csv_path }}"
 
+
       - name: Generate Migration Summary
         if: always()
         shell: pwsh
         run: |
-          $outputCsv = Get-ChildItem -Filter "repo_migration_output-*.csv" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          if ($outputCsv) {
-            $results = Import-Csv -Path $outputCsv.FullName
-            $total   = $results.Count
-            $success = ($results | Where-Object { $_.Migration_Status -eq 'Success' }).Count
-            $failed  = ($results | Where-Object { $_.Migration_Status -eq 'Failure' }).Count
-            $pending = ($results | Where-Object { $_.Migration_Status -eq 'Pending' }).Count
-            $successRate = if ($total -gt 0) { [math]::Round(($success / $total) * 100, 2) } else { 0 }
-            Add-Content $env:GITHUB_STEP_SUMMARY ''
-            Add-Content $env:GITHUB_STEP_SUMMARY '# 🚀 Migration Summary'
-            Add-Content $env:GITHUB_STEP_SUMMARY ("- **Total**: " + $total)
-            Add-Content $env:GITHUB_STEP_SUMMARY ("- **Success**: " + $success)
-            Add-Content $env:GITHUB_STEP_SUMMARY ("- **Failed**: " + $failed)
-            Add-Content $env:GITHUB_STEP_SUMMARY ("- **Pending**: " + $pending)
-            Add-Content $env:GITHUB_STEP_SUMMARY ("- **Success Rate**: " + $successRate + "%")
-          } else {
-            Write-Host "[WARNING] No output CSV found" -ForegroundColor Yellow
+          $ErrorActionPreference = 'Continue'
+
+          # Find latest migration output CSV
+          $outputCsv = Get-ChildItem -Filter "repo_migration_output-*.csv" |
+                       Sort-Object LastWriteTime -Descending |
+                       Select-Object -First 1
+
+          Add-Content $env:GITHUB_STEP_SUMMARY "# 🚀 Migration Execution Summary (Bitbucket Server → GitHub)"
+          Add-Content $env:GITHUB_STEP_SUMMARY ""
+
+          if (-not $outputCsv) {
+            Add-Content $env:GITHUB_STEP_SUMMARY "⚠️ **No output CSV found** (repo_migration_output-*.csv)."
+            Add-Content $env:GITHUB_STEP_SUMMARY ""
+            Add-Content $env:GITHUB_STEP_SUMMARY "## 📁 Artifacts"
+            Add-Content $env:GITHUB_STEP_SUMMARY "- Logs artifact: `migration-logs-${{ github.run_id }}`"
+            Add-Content $env:GITHUB_STEP_SUMMARY "- Verbose logs artifact: `verbose-logs`"
+            Add-Content $env:GITHUB_STEP_SUMMARY "- Output CSV artifact: `migration-output-csv-${{ github.run_id }}`"
+            exit 0
+          }
+
+          $results = Import-Csv -Path $outputCsv.FullName
+
+          $total   = $results.Count
+          $success = ($results | Where-Object { $_.Migration_Status -eq 'Success' }).Count
+          $failed  = ($results | Where-Object { $_.Migration_Status -eq 'Failure' }).Count
+          $pending = ($results | Where-Object { $_.Migration_Status -eq 'Pending' }).Count
+          $successRate = if ($total -gt 0) { [math]::Round(($success / $total) * 100, 2) } else { 0 }
+
+          # --- Overall stats ---
+          Add-Content $env:GITHUB_STEP_SUMMARY "## 📊 Overall Statistics"
+          Add-Content $env:GITHUB_STEP_SUMMARY ("- **Total Repositories**: " + $total)
+          Add-Content $env:GITHUB_STEP_SUMMARY ("- **Successfully Migrated**: ✅ " + $success)
+          Add-Content $env:GITHUB_STEP_SUMMARY ("- **Failed Migrations**: ❌ " + $failed)
+          Add-Content $env:GITHUB_STEP_SUMMARY ("- **Pending/Not Started**: ⏳ " + $pending)
+          Add-Content $env:GITHUB_STEP_SUMMARY ("- **Success Rate**: " + $successRate + "%")
+          Add-Content $env:GITHUB_STEP_SUMMARY ("- **Concurrent Jobs**: " + "${{ inputs.max_concurrent }}")
+          Add-Content $env:GITHUB_STEP_SUMMARY ""
+
+          # --- Artifacts section ---
+          Add-Content $env:GITHUB_STEP_SUMMARY "## 📁 Artifacts"
+          Add-Content $env:GITHUB_STEP_SUMMARY ("- Output CSV: `" + $outputCsv.Name + "` (uploaded as `migration-output-csv-${{ github.run_id }}`)")
+          Add-Content $env:GITHUB_STEP_SUMMARY "- Migration logs: `migration-logs-${{ github.run_id }}` (pattern: `migration-*.txt`)"
+          Add-Content $env:GITHUB_STEP_SUMMARY "- Verbose logs: `verbose-logs` (patterns: `*.log`, `**/*.log`, `logs/**/*.log`)"
+          Add-Content $env:GITHUB_STEP_SUMMARY ""
+
+          # --- Failed migrations table ---
+          if ($failed -gt 0) {
+            Add-Content $env:GITHUB_STEP_SUMMARY "## ❌ Failed Migrations"
+            Add-Content $env:GITHUB_STEP_SUMMARY ""
+            Add-Content $env:GITHUB_STEP_SUMMARY "| Repository | BBS Project | GitHub Org | Log File |"
+            Add-Content $env:GITHUB_STEP_SUMMARY "|------------|-------------|------------|----------|"
+
+            ($results | Where-Object { $_.Migration_Status -eq 'Failure' }) | ForEach-Object {
+              $repoName = if ($_.repo) { $_.repo } else { $_.github_repo }
+              $bbsProj  = $_.'project-key'
+              $ghOrg    = $_.github_org
+              $logFile  = $_.Log_File
+
+              Add-Content $env:GITHUB_STEP_SUMMARY ("| " + $repoName + " | " + $bbsProj + " | " + $ghOrg + " | " + $logFile + " |")
+            }
+
+            Add-Content $env:GITHUB_STEP_SUMMARY ""
+          }
+
+          # --- Success table (limit to first 10) ---
+          if ($success -gt 0) {
+            Add-Content $env:GITHUB_STEP_SUMMARY "## ✅ Successfully Migrated Repositories"
+            Add-Content $env:GITHUB_STEP_SUMMARY ("Total: **" + $success + "** repositories migrated successfully")
+            Add-Content $env:GITHUB_STEP_SUMMARY ""
+            Add-Content $env:GITHUB_STEP_SUMMARY "| Repository | GitHub URL |"
+            Add-Content $env:GITHUB_STEP_SUMMARY "|------------|------------|"
+
+            ($results | Where-Object { $_.Migration_Status -eq 'Success' } | Select-Object -First 10) | ForEach-Object {
+              $repoName = if ($_.repo) { $_.repo } else { $_.github_repo }
+              $ghUrl = "https://github.com/" + $_.github_org + "/" + $_.github_repo
+              Add-Content $env:GITHUB_STEP_SUMMARY ("| " + $repoName + " | " + $ghUrl + " |")
+            }
+
+            $more = $success - 10
+            if ($more -gt 0) {
+              Add-Content $env:GITHUB_STEP_SUMMARY ""
+              Add-Content $env:GITHUB_STEP_SUMMARY ("_... and **" + $more + "** more_")
+            }
           }
 
       - name: Upload Migration Logs
