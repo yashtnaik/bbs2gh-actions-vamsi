@@ -285,8 +285,7 @@ jobs:
         working-directory: ${{ runner.temp }}/bbs2gh-run
         env:
           # ✅ IMPORTANT: force gh to use the stored login (hosts.yml) instead of env-token
-          GH_TOKEN: ''
-    
+          GH_TOKEN: ${{ secrets.GH_PAT }}
           BBS_BASE_URL: ${{ inputs.bbs_base_url }}
           BBS_USERNAME: ${{ secrets.BBS_USERNAME }}
           BBS_PASSWORD: ${{ secrets.BBS_PASSWORD }}
