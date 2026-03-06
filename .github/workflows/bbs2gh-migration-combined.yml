@@ -139,11 +139,9 @@ jobs:
               echo "|---|---|---:|---|"
               awk -F',' 'NR>1 {
                 pk=$1; repo=$3; prs=$5; ready=$7;
-                gsub(/
-/,"",ready);
+                gsub(//,"",ready);
                 mark=(ready=="true"?"✅":"⚠️");
-                printf("| `%s` | `%s` | %s | %s |
-", pk, repo, prs, mark);
+                printf("| `%s` | `%s` | %s | %s |", pk, repo, prs, mark);
               }' "$out_csv"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
@@ -296,7 +294,7 @@ jobs:
           mkdir -p "${{ runner.temp }}/bbs2gh-run"
           chmod +x "$GITHUB_WORKSPACE"/scripts/*.sh || true
           # Run OUTSIDE the checked-out git repo so gh does NOT infer github.com from the repo remote.
-          "$GITHUB_WORKSPACE"/scripts/1_migration.sh             --csv "$GITHUB_WORKSPACE/${{ inputs.csv_path }}"             --max-concurrent "${{ inputs.max_concurrent }}"             --target-api-url "${TARGET_API_URL}"
+          "$GITHUB_WORKSPACE"/scripts/1_migration.sh --csv "$GITHUB_WORKSPACE/${{ inputs.csv_path }}" --max-concurrent "${{ inputs.max_concurrent }}" --target-api-url "${TARGET_API_URL}"
 
       - name: Upload migration logs
         if: always()
