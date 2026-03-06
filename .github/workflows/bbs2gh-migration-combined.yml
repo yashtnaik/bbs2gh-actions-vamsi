@@ -190,6 +190,7 @@ jobs:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       GH_PAT: ${{ secrets.GH_PAT }}
       VERBOSE: ${{ inputs.verbose && '1' || '0' }}
+      GH_CONFIG_DIR: ${{ runner.temp }}/gh-config
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -279,7 +280,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "${{ runner.temp }}/bbs2gh-run"
-
+        
+      - name: Ensure gh login exists for DR host (non-interactive)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$GH_CONFIG_DIR"
+          echo "$GH_PAT" | gh auth login --hostname "$GH_HOST" --with-token
+          gh auth status --hostname "$GH_HOST"
+          
       - name: Run migration (1_migration.sh)
         shell: bash
         working-directory: ${{ runner.temp }}/bbs2gh-run
