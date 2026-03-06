@@ -279,14 +279,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "${{ runner.temp }}/bbs2gh-run"
-        
-      - name: Ensure gh login exists for DR host (non-interactive)
+      
+      - name: Ensure GH auth is stored for the derived host (for 1_migration.sh)
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$GH_CONFIG_DIR"
-          echo "$GH_PAT" | gh auth login --hostname "$GH_HOST" --with-token
-          gh auth status --hostname "$GH_HOST"
+          # This makes `gh auth status` (without --hostname) succeed inside 1_migration.sh
+          echo "${GH_PAT}" | gh auth login --hostname "${GH_HOST}" --with-token
+          gh auth status --hostname "${GH_HOST}"
           
       - name: Run migration (1_migration.sh)
         shell: bash
