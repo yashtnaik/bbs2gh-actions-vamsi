@@ -279,20 +279,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "${{ runner.temp }}/bbs2gh-run"
-      
-      - name: Ensure gh credentials are stored for DR host (so 1_migration.sh passes)
-        shell: bash
-        env:
-          GH_TOKEN: ''
-        run: |
-          set -euo pipefail
-          echo "${GH_PAT}" | gh auth login --hostname "${GH_HOST}" --with-token
-          gh auth status --hostname "${GH_HOST}"
           
       - name: Run migration (1_migration.sh)
         shell: bash
         working-directory: ${{ runner.temp }}/bbs2gh-run
         env:
+          # ✅ IMPORTANT: force gh to use the stored login (hosts.yml) instead of env-token
+          GH_TOKEN: ''
+    
           BBS_BASE_URL: ${{ inputs.bbs_base_url }}
           BBS_USERNAME: ${{ secrets.BBS_USERNAME }}
           BBS_PASSWORD: ${{ secrets.BBS_PASSWORD }}
@@ -306,10 +300,15 @@ jobs:
           AWS_REGION: ${{ secrets.AWS_REGION }}
         run: |
           set -euo pipefail
-          mkdir -p "${{ runner.temp }}/bbs2gh-run"
           chmod +x "$GITHUB_WORKSPACE"/scripts/*.sh || true
-          # Run OUTSIDE the checked-out git repo so gh does NOT infer github.com from the repo remote.
-          "$GITHUB_WORKSPACE"/scripts/1_migration.sh             --csv "$GITHUB_WORKSPACE/${{ inputs.csv_path }}"             --max-concurrent "${{ inputs.max_concurrent }}"             --target-api-url "${TARGET_API_URL}"
+    
+          # (optional) sanity check that stored auth works
+          gh auth status --hostname "${GH_HOST}"
+    
+          "$GITHUB_WORKSPACE"/scripts/1_migration.sh \
+            --csv "$GITHUB_WORKSPACE/${{ inputs.csv_path }}" \
+            --max-concurrent "${{ inputs.max_concurrent }}" \
+            --target-api-url "${TARGET_API_URL}"
 
       - name: Upload migration logs
         if: always()
