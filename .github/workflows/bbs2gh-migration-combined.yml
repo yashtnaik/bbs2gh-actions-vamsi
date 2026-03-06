@@ -18,11 +18,11 @@ on:
         default: '5'
         type: choice
         options: ['1','2','3','4','5','6','7','8','9','10','12','15','20']
-      # target_api_url:
-      #   description: GitHub target REST API base URL for Data Residency
-      #   required: false
-      #   default: https://api.github.com
-      #   type: string
+      target_api_url:
+        description: GitHub target REST API base URL for Data Residency
+        required: false
+        default: https://api.github.com
+        type: string
       run_prechecks:
         description: Run pre-migration readiness checks
         required: false
@@ -94,6 +94,51 @@ jobs:
           path: bbs_pr_validation_output-*.csv
           retention-days: 30
           if-no-files-found: warn
+
+      - name: Prechecks Summary (repo-wise)
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          out_csv="$(ls -1t bbs_pr_validation_output-*.csv 2>/dev/null | head -n 1 || true)"
+
+          {
+            echo "# 🔎 Pre-migration Summary (Open PRs)"
+            echo ""
+            echo "- **CSV input**: \`${{ inputs.csv_path }}\`"
+            echo "- **Bitbucket Base URL**: \`${{ inputs.bbs_base_url }}\`"
+            echo ""
+
+            if [[ -z "$out_csv" || ! -f "$out_csv" ]]; then
+              echo "⚠️ No prechecks output CSV found: \`bbs_pr_validation_output-*.csv\`"
+              exit 0
+            fi
+
+            total="$(awk -F',' 'NR>1 {c++} END{print c+0}' "$out_csv")"
+            warn="$(awk -F',' 'NR>1 && $5 ~ /^[0-9]+$/ && $5+0 > 0 {c++} END{print c+0}' "$out_csv")"
+            ready="$(( total - warn ))"
+
+            echo "## Overall"
+            echo ""
+            echo "- **Total repos**: $total"
+            echo "- **Repos with open PRs (warning)**: ⚠️ $warn"
+            echo "- **Repos with 0 open PRs (ready)**: ✅ $ready"
+            echo ""
+            echo "## Repo-wise Details"
+            echo ""
+            echo "| Project Key | Repo | Open PRs | Ready |"
+            echo "|---|---|---:|---|"
+
+            # CSV columns (from 0_prechecks.sh):
+            # project_key,project_name,repo_slug,is_archived,open_pr_count,warnings,ready_to_migrate
+            awk -F',' 'NR>1 {
+              pk=$1; repo=$3; prs=$5; ready=$7;
+              gsub(/\r/,"",ready);
+              mark=(ready=="true"?"✅":"⚠️");
+              printf("| `%s` | `%s` | %s | %s |\n", pk, repo, prs, mark);
+            }' "$out_csv"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   approval:
     name: Manual Approval
@@ -209,6 +254,63 @@ jobs:
           retention-days: 90
           if-no-files-found: warn
 
+      - name: Migration Summary (repo-wise)
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          out_csv="$(ls -1t repo_migration_output-*.csv 2>/dev/null | head -n 1 || true)"
+
+          {
+            echo "# 🚀 Migration Summary"
+            echo ""
+            echo "- **CSV input**: \`${{ inputs.csv_path }}\`"
+            echo "- **Max concurrent**: \`${{ inputs.max_concurrent }}\`"
+            echo "- **Target API URL**: \`${{ inputs.target_api_url }}\`"
+            echo ""
+
+            if [[ -z "$out_csv" || ! -f "$out_csv" ]]; then
+              echo "⚠️ No migration output CSV found: \`repo_migration_output-*.csv\`"
+              exit 0
+            fi
+
+            total="$(awk -F',' 'NR>1 {c++} END{print c+0}' "$out_csv")"
+            succ="$(awk -F',' 'NR>1 && $7 ~ /Success/ {c++} END{print c+0}' "$out_csv")"
+            fail="$(awk -F',' 'NR>1 && $7 ~ /Failure/ {c++} END{print c+0}' "$out_csv")"
+            pend="$(awk -F',' 'NR>1 && $7 ~ /Pending|In Progress/ {c++} END{print c+0}' "$out_csv")"
+
+            echo "## Overall"
+            echo ""
+            echo "- **Total**: $total"
+            echo "- **Success**: ✅ $succ"
+            echo "- **Failure**: ❌ $fail"
+            echo "- **Pending/In Progress**: ⏳ $pend"
+            echo ""
+            echo "## Repo-wise Status"
+            echo ""
+            echo "| GitHub Repo | BBS Repo | Status | Log |"
+            echo "|---|---|---|---|"
+
+            # CSV columns (from 1_migration.sh):
+            # project-key,project-name,repo,github_org,github_repo,gh_repo_visibility,Migration_Status,Log_File
+            awk -F',' 'NR>1 {
+              # remove double quotes if present
+              for(i=1;i<=NF;i++){ gsub(/"/,"",$i) }
+              bbs=$1 "/" $3
+              gh=$4 "/" $5
+              st=$7
+              lg=$8
+
+              mark="⏳"
+              if (st=="Success") mark="✅"
+              else if (st=="Failure") mark="❌"
+
+              logcell = (lg!="" ? "`" lg "`" : "")
+              printf("| %s | %s | %s %s | %s |\n", gh, bbs, mark, st, logcell)
+            }' "$out_csv"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   validate:
     name: Post-migration Validation
     runs-on: ${{ inputs.runner_label }}
@@ -264,3 +366,28 @@ jobs:
             validation_summary_*.md
           retention-days: 30
           if-no-files-found: warn
+
+      - name: Post-validation Summary (repo-wise)
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          md="$(ls -1t validation_summary_*.md 2>/dev/null | head -n 1 || true)"
+
+          {
+            echo "# ✅ Post-migration Validation Summary"
+            echo ""
+            echo "- **CSV input**: \`${{ inputs.csv_path }}\`"
+            echo "- **Bitbucket Base URL**: \`${{ inputs.bbs_base_url }}\`"
+            echo ""
+
+            if [[ -z "$md" || ! -f "$md" ]]; then
+              echo "⚠️ No validation markdown found: \`validation_summary_*.md\`"
+              exit 0
+            fi
+
+            echo "## Repo-wise Results (branches / commits / SHA)"
+            echo ""
+            cat "$md"
+          } >> "$GITHUB_STEP_SUMMARY"
