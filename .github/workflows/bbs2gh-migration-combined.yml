@@ -123,19 +123,24 @@ jobs:
     timeout-minutes: 360
     needs: [approval]
     if: ${{ inputs.run_migration }}
+    env:
+      # IMPORTANT: GH CLI uses GH_TOKEN automatically and does not require interactive login.
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      GH_PAT: ${{ secrets.GH_PAT }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup GitHub CLI auth
+      - name: Verify GitHub CLI auth (non-interactive)
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "::error::GH_PAT secret is missing or not available to this workflow run." 
+            exit 1
+          fi
           gh --version
-          echo "$GH_TOKEN" | gh auth login --with-token
-          gh auth status
+          gh auth status --hostname github.com
 
       - name: Install jq
         shell: bash
@@ -148,8 +153,6 @@ jobs:
 
       - name: Install gh-bbs2gh extension
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
           if ! gh extension list | awk '{print $1}' | grep -qx 'github/gh-bbs2gh'; then
@@ -157,11 +160,28 @@ jobs:
           fi
           gh bbs2gh --version
 
+      - name: Pre-validate CSV header for migration script
+        shell: bash
+        run: |
+          set -euo pipefail
+          f="${{ inputs.csv_path }}"
+          [[ -f "$f" ]] || { echo "::error::CSV not found: $f"; exit 1; }
+          header=$(head -n1 "$f" | tr -d '\r')
+          echo "CSV header: $header"
+          required=("project-key" "project-name" "repo" "github_org" "github_repo" "gh_repo_visibility")
+          missing=()
+          for c in "${required[@]}"; do
+            echo "$header" | grep -q "$c" || missing+=("$c")
+          done
+          if (( ${#missing[@]} > 0 )); then
+            echo "::error::CSV missing required columns: ${missing[*]}"
+            echo "::error::Required: ${required[*]}"
+            exit 1
+          fi
+
       - name: Run migration (1_migration.sh)
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          GH_PAT: ${{ secrets.GH_PAT }}
           BBS_BASE_URL: ${{ inputs.bbs_base_url }}
           BBS_USERNAME: ${{ secrets.BBS_USERNAME }}
           BBS_PASSWORD: ${{ secrets.BBS_PASSWORD }}
@@ -195,19 +215,23 @@ jobs:
     timeout-minutes: 120
     needs: [approval, migrate]
     if: ${{ inputs.run_post_validation && (needs.migrate.result == 'success' || needs.migrate.result == 'skipped') }}
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      GH_PAT: ${{ secrets.GH_PAT }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup GitHub CLI auth
+      - name: Verify GitHub CLI auth (non-interactive)
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "::error::GH_PAT secret is missing or not available to this workflow run." 
+            exit 1
+          fi
           gh --version
-          echo "$GH_TOKEN" | gh auth login --with-token
-          gh auth status
+          gh auth status --hostname github.com
 
       - name: Install dependencies (jq, python3)
         shell: bash
@@ -224,8 +248,6 @@ jobs:
           BBS_AUTH_TYPE: ${{ secrets.BBS_AUTH_TYPE }}
           BBS_USERNAME: ${{ secrets.BBS_USERNAME }}
           BBS_PASSWORD: ${{ secrets.BBS_PASSWORD }}
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          GH_PAT: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
           chmod +x scripts/*.sh || true
