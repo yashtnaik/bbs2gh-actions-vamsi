@@ -19,10 +19,15 @@ on:
         type: choice
         options: ['1','2','3','4','5','6','7','8','9','10','12','15','20']
       # target_api_url:
-      #   description: GitHub target REST API base URL (Data Residency). Examples: https://api.github.com or https://api.<your-tenant>.ghe.com
+      #   description: GitHub target REST API base URL (DR). Leave empty to use repo variable TARGET_API_URL. Examples: https://api.github.com or https://api.<tenant>.ghe.com
       #   required: false
-      #   default: https://api.github.com
+      #   default: ''
       #   type: string
+      verbose:
+        description: Enable verbose logging (captures additional *.log files if produced)
+        required: false
+        default: false
+        type: boolean
       run_prechecks:
         description: Run pre-migration readiness checks
         required: false
@@ -61,7 +66,6 @@ jobs:
     timeout-minutes: 30
     outputs:
       open_pr_repos: ${{ steps.precheck-meta.outputs.open_pr_repos }}
-      output_csv: ${{ steps.precheck-meta.outputs.output_csv }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -107,7 +111,6 @@ jobs:
           fi
 
           echo "open_pr_repos=$open_pr_repos" >> "$GITHUB_OUTPUT"
-          echo "output_csv=$out_csv" >> "$GITHUB_OUTPUT"
 
           {
             echo "# 🔎 Pre-migration Summary (Open PRs)"
@@ -170,7 +173,8 @@ jobs:
 
             - CSV: `${{ inputs.csv_path }}`
             - Bitbucket Base URL: `${{ inputs.bbs_base_url }}`
-            - Target API URL: `${{ inputs.target_api_url }}`
+            - target_api_url input: `${{ inputs.target_api_url }}`
+            - repo var TARGET_API_URL: `${{ vars.TARGET_API_URL }}`
             - Open PR repos (warning): `${{ needs.prechecks.outputs.open_pr_repos }}`
           exclude-workflow-initiator-as-approver: false
           fail-on-denial: true
@@ -185,32 +189,51 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       GH_PAT: ${{ secrets.GH_PAT }}
-      TARGET_API_URL: ${{ inputs.target_api_url }}
+      # for scripts
+      VERBOSE: ${{ inputs.verbose && '1' || '0' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Derive GH_HOST from TARGET_API_URL (Data Residency safe)
+      - name: Resolve TARGET_API_URL (input -> repo var -> default) + derive GH_HOST
         shell: bash
+        env:
+          INPUT_TARGET_API_URL: ${{ inputs.target_api_url }}
+          VAR_TARGET_API_URL: ${{ vars.TARGET_API_URL }}
         run: |
           set -euo pipefail
-          # Derive GH_HOST from the target API URL.
-          # Examples:
-          #   https://api.github.com          -> github.com
-          #   https://api.<tenant>.ghe.com    -> <tenant>.ghe.com
+
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "::error::GH_PAT secret is missing or not available to this workflow run."
+            exit 1
+          fi
+
+          TARGET_API_URL="${INPUT_TARGET_API_URL:-}"
+          if [[ -z "$TARGET_API_URL" ]]; then
+            TARGET_API_URL="${VAR_TARGET_API_URL:-}"
+          fi
+          if [[ -z "$TARGET_API_URL" ]]; then
+            TARGET_API_URL="https://api.github.com"
+          fi
+
           host=$(echo "${TARGET_API_URL}" | sed -E 's#^https?://##; s#/.*$##')
-          gh_host="${host#api.}"
-          echo "GH_HOST=$gh_host" >> "$GITHUB_ENV"
-          echo "Resolved GH_HOST=$gh_host"
+          GH_HOST="${host#api.}"
+
+          if [[ -z "${GH_HOST}" ]]; then
+            echo "::error::Could not derive GH_HOST from TARGET_API_URL='${TARGET_API_URL}'"
+            exit 1
+          fi
+
+          echo "TARGET_API_URL=${TARGET_API_URL}" >> "$GITHUB_ENV"
+          echo "GH_HOST=${GH_HOST}" >> "$GITHUB_ENV"
+
+          echo "Resolved TARGET_API_URL=${TARGET_API_URL}"
+          echo "Resolved GH_HOST=${GH_HOST}"
 
       - name: Verify GitHub CLI auth (non-interactive)
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "${GH_TOKEN:-}" ]]; then
-            echo "::error::GH_PAT secret is missing or not available to this workflow run."
-            exit 1
-          fi
           gh --version
           gh auth status --hostname "${GH_HOST}"
 
@@ -247,23 +270,6 @@ jobs:
           echo "CSV header after normalization:"
           head -n 1 "$f"
 
-      - name: Pre-validate CSV header for migration script
-        shell: bash
-        run: |
-          set -euo pipefail
-          f="${{ inputs.csv_path }}"
-          header=$(head -n1 "$f" | tr -d '\r')
-          required=("project-key" "project-name" "repo" "github_org" "github_repo" "gh_repo_visibility")
-          missing=()
-          for c in "${required[@]}"; do
-            echo "$header" | grep -q "$c" || missing+=("$c")
-          done
-          if (( ${#missing[@]} > 0 )); then
-            echo "::error::CSV missing required columns: ${missing[*]}"
-            echo "::error::Required: ${required[*]}"
-            exit 1
-          fi
-
       - name: Run migration (1_migration.sh)
         shell: bash
         env:
@@ -272,8 +278,7 @@ jobs:
           BBS_PASSWORD: ${{ secrets.BBS_PASSWORD }}
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          # Keep TARGET_API_URL consistent for your script
-          TARGET_API_URL: ${{ inputs.target_api_url }}
+          TARGET_API_URL: ${{ env.TARGET_API_URL }}
           AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -285,16 +290,35 @@ jobs:
           ./scripts/1_migration.sh \
             --csv "${{ inputs.csv_path }}" \
             --max-concurrent "${{ inputs.max_concurrent }}" \
-            --target-api-url "${{ inputs.target_api_url }}"
+            --target-api-url "${TARGET_API_URL}"
 
-      - name: Upload migration outputs
+      - name: Upload migration logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: migration-outputs-${{ github.run_id }}
+          name: migration-logs-${{ github.run_id }}
+          path: migration-*.txt
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: Upload migration output CSV
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-output-csv-${{ github.run_id }}
+          path: repo_migration_output-*.csv
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: Upload verbose logs (if produced)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verbose-logs-${{ github.run_id }}
           path: |
-            migration-*.txt
-            repo_migration_output-*.csv
+            *.log
+            */*.log
+            logs/*/*.log
           retention-days: 90
           if-no-files-found: warn
 
@@ -309,9 +333,16 @@ jobs:
             echo ""
             echo "- **CSV input**: \`${{ inputs.csv_path }}\`"
             echo "- **Max concurrent**: \`${{ inputs.max_concurrent }}\`"
-            echo "- **Target API URL**: \`${{ inputs.target_api_url }}\`"
-            echo "- **GH host (derived)**: \`${GH_HOST}\`"
+            echo "- **TARGET_API_URL**: \`${TARGET_API_URL:-}\`"
+            echo "- **GH_HOST (derived)**: \`${GH_HOST:-}\`"
+            echo "- **Verbose enabled**: \`${{ inputs.verbose }}\`"
             echo ""
+            echo "## 📁 Artifacts"
+            echo "- Migration logs: **migration-logs-${{ github.run_id }}**"
+            echo "- Output CSV: **migration-output-csv-${{ github.run_id }}**"
+            echo "- Verbose logs: **verbose-logs-${{ github.run_id }}** (if any *.log were produced)"
+            echo ""
+
             if [[ -z "$out_csv" || ! -f "$out_csv" ]]; then
               echo "⚠️ No migration output CSV found (repo_migration_output-*.csv)."
             else
@@ -354,19 +385,34 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       GH_PAT: ${{ secrets.GH_PAT }}
-      TARGET_API_URL: ${{ inputs.target_api_url }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Derive GH_HOST from TARGET_API_URL (Data Residency safe)
+      - name: Resolve TARGET_API_URL (input -> repo var -> default) + derive GH_HOST
         shell: bash
+        env:
+          INPUT_TARGET_API_URL: ${{ inputs.target_api_url }}
+          VAR_TARGET_API_URL: ${{ vars.TARGET_API_URL }}
         run: |
           set -euo pipefail
+
+          TARGET_API_URL="${INPUT_TARGET_API_URL:-}"
+          if [[ -z "$TARGET_API_URL" ]]; then
+            TARGET_API_URL="${VAR_TARGET_API_URL:-}"
+          fi
+          if [[ -z "$TARGET_API_URL" ]]; then
+            TARGET_API_URL="https://api.github.com"
+          fi
+
           host=$(echo "${TARGET_API_URL}" | sed -E 's#^https?://##; s#/.*$##')
-          gh_host="${host#api.}"
-          echo "GH_HOST=$gh_host" >> "$GITHUB_ENV"
-          echo "Resolved GH_HOST=$gh_host"
+          GH_HOST="${host#api.}"
+
+          echo "TARGET_API_URL=${TARGET_API_URL}" >> "$GITHUB_ENV"
+          echo "GH_HOST=${GH_HOST}" >> "$GITHUB_ENV"
+
+          echo "Resolved TARGET_API_URL=${TARGET_API_URL}"
+          echo "Resolved GH_HOST=${GH_HOST}"
 
       - name: Verify GitHub CLI auth (non-interactive)
         shell: bash
@@ -399,7 +445,6 @@ jobs:
           chmod +x scripts/*.sh || true
           ./scripts/2_validation.sh -c "${{ inputs.csv_path }}" -b "${{ inputs.bbs_base_url }}"
 
-          # Copy newest markdown summary to a stable name for convenience
           latest_md=$(ls -1t validation_summary_*.md 2>/dev/null | head -n 1 || true)
           if [[ -n "$latest_md" ]]; then
             cp -f "$latest_md" validation-summary.md
@@ -429,8 +474,8 @@ jobs:
             echo ""
             echo "- **CSV input**: \`${{ inputs.csv_path }}\`"
             echo "- **Bitbucket Base URL**: \`${{ inputs.bbs_base_url }}\`"
-            echo "- **Target API URL**: \`${{ inputs.target_api_url }}\`"
-            echo "- **GH host (derived)**: \`${GH_HOST}\`"
+            echo "- **TARGET_API_URL**: \`${TARGET_API_URL:-}\`"
+            echo "- **GH_HOST (derived)**: \`${GH_HOST:-}\`"
             echo ""
             if [[ -z "$md" || ! -f "$md" ]]; then
               echo "⚠️ No validation markdown summary found (validation_summary_*.md)."
