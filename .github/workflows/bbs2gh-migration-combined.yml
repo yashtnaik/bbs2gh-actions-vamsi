@@ -24,7 +24,7 @@ on:
       #   default: ''
       #   type: string
       verbose:
-        description: Enable verbose logging (captures additional *.log files if produced)
+        description: Enable verbose logging (sets VERBOSE=1 and uploads *.log artifacts if produced)
         required: false
         default: false
         type: boolean
@@ -189,7 +189,6 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       GH_PAT: ${{ secrets.GH_PAT }}
-      # for scripts
       VERBOSE: ${{ inputs.verbose && '1' || '0' }}
     steps:
       - name: Checkout
@@ -202,7 +201,6 @@ jobs:
           VAR_TARGET_API_URL: ${{ vars.TARGET_API_URL }}
         run: |
           set -euo pipefail
-
           if [[ -z "${GH_TOKEN:-}" ]]; then
             echo "::error::GH_PAT secret is missing or not available to this workflow run."
             exit 1
@@ -218,7 +216,6 @@ jobs:
 
           host=$(echo "${TARGET_API_URL}" | sed -E 's#^https?://##; s#/.*$##')
           GH_HOST="${host#api.}"
-
           if [[ -z "${GH_HOST}" ]]; then
             echo "::error::Could not derive GH_HOST from TARGET_API_URL='${TARGET_API_URL}'"
             exit 1
@@ -230,12 +227,12 @@ jobs:
           echo "Resolved TARGET_API_URL=${TARGET_API_URL}"
           echo "Resolved GH_HOST=${GH_HOST}"
 
-      # - name: Verify GitHub CLI auth (non-interactive)
-      #   shell: bash
-      #   run: |
-      #     set -euo pipefail
-      #     gh --version
-      #     gh auth status --hostname "${GH_HOST}"
+      - name: Verify GitHub CLI auth (non-interactive)
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh --version
+          gh auth status --hostname "${GH_HOST}"
 
       - name: Install dependencies (jq)
         shell: bash
@@ -246,11 +243,17 @@ jobs:
             sudo apt-get install -y jq
           fi
 
-      - name: Install gh-bbs2gh extension (host-agnostic)
+      - name: Install gh-bbs2gh extension (DR-safe)
         shell: bash
+        env:
+          # We are authenticated to a DR host via GH_HOST/GH_TOKEN in the job.
+          # The extension lives on github.com. If GH_TOKEN is a DR token, gh may send it to api.github.com
+          # and get HTTP 401. To avoid that, unset GH_TOKEN for this step and use anonymous access.
+          GH_TOKEN: ''
+          GH_HOST: github.com
         run: |
           set -euo pipefail
-          # Use full URL so install works even when GH_HOST is a non-github.com host.
+          # Use full URL so install works regardless of the active GH_HOST.
           if gh extension list | awk '{print $1}' | grep -qx 'gh-bbs2gh'; then
             gh extension upgrade gh-bbs2gh
           else
@@ -396,7 +399,6 @@ jobs:
           VAR_TARGET_API_URL: ${{ vars.TARGET_API_URL }}
         run: |
           set -euo pipefail
-
           TARGET_API_URL="${INPUT_TARGET_API_URL:-}"
           if [[ -z "$TARGET_API_URL" ]]; then
             TARGET_API_URL="${VAR_TARGET_API_URL:-}"
@@ -410,9 +412,6 @@ jobs:
 
           echo "TARGET_API_URL=${TARGET_API_URL}" >> "$GITHUB_ENV"
           echo "GH_HOST=${GH_HOST}" >> "$GITHUB_ENV"
-
-          echo "Resolved TARGET_API_URL=${TARGET_API_URL}"
-          echo "Resolved GH_HOST=${GH_HOST}"
 
       - name: Verify GitHub CLI auth (non-interactive)
         shell: bash
