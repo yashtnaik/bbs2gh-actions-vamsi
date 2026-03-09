@@ -52,10 +52,7 @@ on:
           - ubuntu-latest
           - self-hosted
       migrate_timeout_minutes:
-        description: |
-          Migrate job timeout in minutes.
-          GitHub-hosted runners are hard-capped at 360 min (6 h) regardless of this value.
-          Self-hosted runners support up to 35 days — increase this for large batches (e.g. 100+ repos).
+        description: "Job timeout (minutes). GitHub-hosted max: 360; self-hosted max: 35 days."
         required: false
         default: '360'
         type: choice
