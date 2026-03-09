@@ -3,11 +3,6 @@ name: bbs-to-gh-migration
 on:
   workflow_dispatch:
     inputs:
-      csv_path:
-        description: Path to repos CSV file
-        required: true
-        default: repos.csv
-        type: string
       bbs_base_url:
         description: Bitbucket Server/Data Center base URL (e.g., https://bitbucket.example.com:7990)
         required: true
@@ -100,7 +95,7 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x scripts/*.sh || true
-          ./scripts/0_prechecks.sh -c "${{ inputs.csv_path }}"
+          ./scripts/0_prechecks.sh -c "$GITHUB_WORKSPACE/repos.csv"
 
       - name: Collect prechecks output + write summary
         id: precheck-meta
@@ -124,7 +119,7 @@ jobs:
           {
             echo "# 🔎 Pre-migration Summary (Open PRs)"
             echo
-            echo "- **CSV input**: \`${{ inputs.csv_path }}\`"
+            echo "- **CSV input**: \`repos.csv\`"
             echo "- **Bitbucket Base URL**: \`${{ inputs.bbs_base_url }}\`"
             echo "- **Prechecks enabled**: \`${{ inputs.run_prechecks }}\`"
             echo
@@ -239,7 +234,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          f="$GITHUB_WORKSPACE/${{ inputs.csv_path }}"
+          f="$GITHUB_WORKSPACE/repos.csv"
           [[ -f "$f" ]] || { echo "::error::CSV not found: $f"; exit 1; }
           sed -i 's/\r$//' "$f"
           sed -i 's/, */,/g' "$f"
@@ -293,7 +288,7 @@ jobs:
           chmod +x "$GITHUB_WORKSPACE"/scripts/*.sh || true
 
           "$GITHUB_WORKSPACE"/scripts/1_migration.sh \
-            --csv "$GITHUB_WORKSPACE/${{ inputs.csv_path }}" \
+            --csv "$GITHUB_WORKSPACE/repos.csv" \
             --max-concurrent "${{ inputs.max_concurrent }}" \
             --target-api-url "${TARGET_API_URL}"
 
@@ -403,7 +398,7 @@ jobs:
           chmod +x "$GITHUB_WORKSPACE"/scripts/*.sh || true
 
           "$GITHUB_WORKSPACE"/scripts/2_validation.sh \
-            -c "$GITHUB_WORKSPACE/${{ inputs.csv_path }}" \
+            -c "$GITHUB_WORKSPACE/repos.csv" \
             -b "${{ inputs.bbs_base_url }}"
 
       - name: Upload validation outputs
