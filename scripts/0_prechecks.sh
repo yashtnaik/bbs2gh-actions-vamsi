@@ -2,26 +2,21 @@
 set -euo pipefail
 
 # Usage:
-#   ./0_prechecks.sh [-c repos.csv] [-o output.csv] [-p "KEY1,KEY2"]
+#   ./0_prechecks.sh [-c repos.csv] [-o output.csv]
 #
 # CSV columns required: project-key, project-name, repo, github_org, github_repo, gh_repo_visibility
 # Env: BBS_BASE_URL + (BBS_PAT or BBS_USERNAME+BBS_PASSWORD with BBS_AUTH_TYPE=Basic)
 
 CSV_PATH="repos.csv"
 OUTPUT_PATH=""
-PROJECT_KEYS_CSV=""
 
-while getopts ":c:o:p:" opt; do
+while getopts ":c:o:" opt; do
   case "$opt" in
     c) CSV_PATH="$OPTARG" ;;
     o) OUTPUT_PATH="$OPTARG" ;;
-    p) PROJECT_KEYS_CSV="$OPTARG" ;;
-    *) echo "Usage: $0 [-c repos.csv] [-o output.csv] [-p KEY1,KEY2]" >&2; exit 1 ;;
+    *) echo "Usage: $0 [-c repos.csv] [-o output.csv]" >&2; exit 1 ;;
   esac
 done
-
-# Strip stray quotes from the resolved CSV (must come after getopts)
-sed -i 's/"//g' "$CSV_PATH"
 
 if [[ -z "${BBS_BASE_URL:-}" ]]; then
   echo "[ERROR] BBS_BASE_URL env var is required." >&2
@@ -60,42 +55,6 @@ ready_tmp=""
 results_tmp=""
 trap 'rm -f "${rows_tmp:-}" "${ready_tmp:-}" "${results_tmp:-}"' EXIT
 
-IFS=',' read -r -a PROJECT_KEYS <<< "${PROJECT_KEYS_CSV:-}"
-
-discover_projects() {
-  local start=0 isLast nextStart
-  local results=()
-  while :; do
-    local resp; resp="$(curl_json "${BASE_URL}/rest/api/1.0/projects?limit=100&start=${start}")"
-    local chunk=()
-    mapfile -t chunk < <(echo "$resp" | jq -r '.values[]?.key')
-    [[ ${#chunk[@]} -gt 0 ]] && results+=("${chunk[@]}")
-    isLast="$(echo "$resp" | jq -r '.isLastPage')"
-    nextStart="$(echo "$resp" | jq -r '.nextPageStart // empty')"
-    [[ "$isLast" == "true" ]] && break
-    [[ -z "$nextStart" ]] && break
-    start="$nextStart"
-  done
-  printf "%s\n" "${results[@]}"
-}
-
-discover_repos_for_project() {
-  local projectKey="$1"
-  local start=0
-  while :; do
-    resp="$(curl_json "${BASE_URL}/rest/api/1.0/projects/${projectKey}/repos?limit=100&start=${start}")"
-    echo "$resp" | jq -r '.values[]? | @base64' | while read -r row; do
-      _jq() { echo "$row" | base64 --decode | jq -r "$1"; }
-      printf "%s,%s,%s\n" "$(_jq '.project.name')" "$(_jq '.slug')" "$(_jq '.archived')"
-    done
-    isLast="$(echo "$resp" | jq -r '.isLastPage')"
-    nextStart="$(echo "$resp" | jq -r '.nextPageStart // empty')"
-    [[ "$isLast" == "true" ]] && break
-    [[ -z "$nextStart" ]] && break
-    start="$nextStart"
-  done
-}
-
 get_open_pr_count() {
   local projectKey="$1" repoSlug="$2"
   # Use limit=1 and read the top-level .size — a single call gives the full count
@@ -108,32 +67,27 @@ echo ""
 echo " Bitbucket Readiness Check (Open PRs only) "
 echo "============================================"
 
-# Load or discover input rows
-rows_tmp="$(mktemp)"
-if [[ -f "$CSV_PATH" ]] && [[ -s "$CSV_PATH" ]]; then
-  header="$(head -n1 "$CSV_PATH")"
-  if echo "$header" | grep -q "project-key" && echo "$header" | grep -q ",repo"; then
-    tail -n +2 "$CSV_PATH" > "$rows_tmp"
-  else
-    echo "[ERROR] CSV missing minimum columns: project-key,repo"
-    echo "[INFO] Falling back to auto-discovery."
+# Validate CSV input — fail fast if missing, empty, or wrong header
+if [[ ! -f "$CSV_PATH" ]]; then
+  echo "[ERROR] CSV file not found: ${CSV_PATH}" >&2
+  echo "[INFO]  Provide a CSV via -c or ensure repos.csv exists in the working directory." >&2
+  exit 1
+fi
+if [[ ! -s "$CSV_PATH" ]]; then
+  echo "[ERROR] CSV file is empty: ${CSV_PATH}" >&2
+  exit 1
+fi
+header="$(head -n1 "$CSV_PATH")"
+for required_col in "project-key" "project-name" "repo"; do
+  if ! echo "$header" | grep -q "$required_col"; then
+    echo "[ERROR] CSV is missing required column '${required_col}': ${CSV_PATH}" >&2
+    exit 1
   fi
-fi
+done
 
-if [[ ! -s "$rows_tmp" ]]; then
-  echo "[INFO] Auto-discovering projects & repos..."
-  mapfile -t projects < <(discover_projects)
-  for pk in "${projects[@]}"; do
-    if [[ "${#PROJECT_KEYS[@]}" -gt 0 ]]; then
-      match=false
-      for filter in "${PROJECT_KEYS[@]}"; do [[ "$pk" == "$filter" ]] && match=true; done
-      [[ "$match" == "false" ]] && continue
-    fi
-    discover_repos_for_project "$pk" | while IFS=',' read -r pname rslug archived; do
-      printf "%s,%s,%s,%s\n" "$pk" "$pname" "$rslug" "$archived" >> "$rows_tmp"
-    done
-  done
-fi
+rows_tmp="$(mktemp)"
+# Strip stray quotes then copy data rows into temp file
+sed 's/"//g' "$CSV_PATH" | tail -n +2 > "$rows_tmp"
 
 # Process
 ready_tmp="$(mktemp)"
