@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # ------------------------------------------------------------------------------
 # Bitbucket ↔ GitHub Migration Validation (CLI)
-# - Validates branch sets, commit counts, and latest SHAs between Bitbucket S/DC and GitHub
+# - Validates branch sets and HEAD commit SHAs between Bitbucket S/DC and GitHub
+# - Extracts SHAs from branch-list API responses — no per-branch commit pagination needed
 # - Writes: validation-log-<date>.txt, validation-summary.csv, validation-summary.md
 #
 # CSV columns required: project-key, project-name, repo, github_org, github_repo
@@ -59,80 +60,27 @@ auth_header() {
 curl_json() { curl -sS -H "$(auth_header)" "$1"; }
 
 # ---- Bitbucket helpers --------------------------------------------------------
-get_bbs_branches() {
+# Returns tab-separated lines: branchName<TAB>sha  (paginated, limit 500 per page)
+get_bbs_branches_with_shas() {
   local projectKey="$1" repoSlug="$2" start=0
-  local branches=()
   while :; do
     local resp; resp="$(curl_json "${BASE_URL}/rest/api/1.0/projects/${projectKey}/repos/${repoSlug}/branches?limit=500&start=${start}")"
-    mapfile -t chunk < <(echo "$resp" | jq -r '.values[]?.displayId')
-    branches+=("${chunk[@]}")
+    echo "$resp" | jq -r '.values[]? | [.displayId, .latestCommit] | @tsv'
     local isLast; isLast="$(echo "$resp" | jq -r '.isLastPage')"
     local nextStart; nextStart="$(echo "$resp" | jq -r '.nextPageStart // empty')"
     [[ "$isLast" == "true" ]] && break
     [[ -z "$nextStart" ]] && break
     start="$nextStart"
   done
-  printf "%s\n" "${branches[@]}" | sort -u
-}
-
-urlencode_py() {
-  python3 - "$1" <<'PY'
-import sys, urllib.parse
-print(urllib.parse.quote(sys.argv[1]))
-PY
-}
-
-get_bbs_commits_info() {
-  local projectKey="$1" repoSlug="$2" branch="$3"
-  # If called with a 4th arg (known GH SHA), fetch only the first page to get the
-  # latest BBS SHA and short-circuit the full count pagination when SHAs match.
-  local known_gh_sha="${4:-}"
-  local total=0 latest="" start=0 limit=1000
-  local encBranch; encBranch="$(urlencode_py "$branch")"
-  while :; do
-    local resp; resp="$(curl_json "${BASE_URL}/rest/api/1.0/projects/${projectKey}/repos/${repoSlug}/commits?until=${encBranch}&limit=${limit}&start=${start}")"
-    local cnt; cnt="$(echo "$resp" | jq '.values | length')"
-    if [[ -z "$latest" && "$cnt" -gt 0 ]]; then
-      latest="$(echo "$resp" | jq -r '.values[0].id')"
-      # If caller supplied the GH SHA and it already matches, no need to count all pages
-      if [[ -n "$known_gh_sha" && "$latest" == "$known_gh_sha" ]]; then
-        # Return a sentinel count equal to GH count (caller checks SHA first)
-        echo "SKIP,${latest}"
-        return
-      fi
-    fi
-    total=$(( total + cnt ))
-    local isLast; isLast="$(echo "$resp" | jq -r '.isLastPage')"
-    local nextStart; nextStart="$(echo "$resp" | jq -r '.nextPageStart // empty')"
-    [[ "$isLast" == "true" ]] && break
-    [[ -z "$nextStart" ]] && break
-    start="$nextStart"
-  done
-  echo "${total},${latest}"
 }
 
 # ---- GitHub helpers -----------------------------------------------------------
 gh_repo_exists() { gh api -X GET "/repos/$1/$2" >/dev/null 2>&1; }
 
-get_gh_branches() {
-  gh api "/repos/$1/$2/branches" --paginate | jq -r '.[].name' | sort -u
-}
-
-get_gh_commits_info() {
-  local org="$1" repo="$2" branch="$3"
-  local total=0 latest="" page=1 per=100
-  local encBranch; encBranch="$(urlencode_py "$branch")"
-  while :; do
-    local chunk; chunk="$(gh api "/repos/${org}/${repo}/commits?sha=${encBranch}&page=${page}&per_page=${per}" | jq -c '.')"
-    local count; count="$(echo "$chunk" | jq 'length')"
-    if [[ "$page" -eq 1 && "$count" -gt 0 ]]; then
-      latest="$(echo "$chunk" | jq -r '.[0].sha')"
-    fi
-    total=$(( total + count ))
-    [[ "$count" -lt "$per" ]] && break
-    page=$((page+1))
-  done
-  echo "${total},${latest}"
+# Returns tab-separated lines: branchName<TAB>sha  (paginated, 100 per page)
+get_gh_branches_with_shas() {
+  local org="$1" repo="$2"
+  gh api "/repos/${org}/${repo}/branches" --paginate | jq -r '.[] | [.name, .commit.sha] | @tsv'
 }
 
 status_marker() { # $1: ok|true|false
@@ -205,7 +153,7 @@ if [[ ${#missing_cols[@]} -gt 0 ]]; then
 fi
 
 summary_csv="validation-summary-$(date +'%Y%m%d-%H%M%S').csv"
-echo "github_org,github_repo,bbs_project_key,bbs_repo,branch_count_bbs,branch_count_gh,branch_count_match,commits_match_all,shas_match_all,gh_notes" > "$summary_csv"
+echo "github_org,github_repo,bbs_project_key,bbs_repo,branch_count_bbs,branch_count_gh,branch_count_match,shas_match_all,gh_notes" > "$summary_csv"
 
 echo "==> Starting validation..."
 
@@ -219,54 +167,55 @@ validate_repo() {
   {
     echo "[$(date)] Processing: ${bbsProjectKey}/${bbsRepoSlug} -> ${ghOrg}/${ghRepo}"
 
+    # A — Check GitHub repo exists
     local ghExists="yes"
     if ! gh_repo_exists "$ghOrg" "$ghRepo"; then
       echo "[$(date)] GitHub repo not found or inaccessible: ${ghOrg}/${ghRepo}. Treating GH side as empty."
       ghExists="no"
     fi
 
-    local bbsBranches=() ghBranches=()
-    mapfile -t bbsBranches < <(get_bbs_branches "$bbsProjectKey" "$bbsRepoSlug")
-    mapfile -t ghBranches < <( [[ "$ghExists" == "yes" ]] && get_gh_branches "$ghOrg" "$ghRepo" || true )
+    # B — Fetch branch names + HEAD SHAs from both sides using the branch-list responses
+    #     (no separate per-branch commit API calls needed)
+    declare -A bbsSHAmap=() ghSHAmap=()
+    while IFS=$'\t' read -r name sha; do
+      [[ -n "$name" ]] && bbsSHAmap["$name"]="$sha"
+    done < <(get_bbs_branches_with_shas "$bbsProjectKey" "$bbsRepoSlug")
 
-    local bbsBranchCount="${#bbsBranches[@]}" ghBranchCount="${#ghBranches[@]}"
+    if [[ "$ghExists" == "yes" ]]; then
+      while IFS=$'\t' read -r name sha; do
+        [[ -n "$name" ]] && ghSHAmap["$name"]="$sha"
+      done < <(get_gh_branches_with_shas "$ghOrg" "$ghRepo")
+    fi
+
+    # C — Branch count comparison
+    local bbsBranchCount="${#bbsSHAmap[@]}" ghBranchCount="${#ghSHAmap[@]}"
     local branchCountOk="false"; [[ "$bbsBranchCount" -eq "$ghBranchCount" ]] && branchCountOk="true"
     echo "[$(date)] Branch Count: BBS=${bbsBranchCount} GitHub=${ghBranchCount} $(status_marker "$branchCountOk")"
 
     local missingInGH missingInBBS
-    missingInGH=$(comm -23 <(printf "%s\n" "${bbsBranches[@]}" | sort) <(printf "%s\n" "${ghBranches[@]}" | sort || true) || true)
-    missingInBBS=$(comm -13 <(printf "%s\n" "${bbsBranches[@]}" | sort) <(printf "%s\n" "${ghBranches[@]}" | sort || true) || true)
+    missingInGH=$(comm -23 \
+      <(printf "%s\n" "${!bbsSHAmap[@]}" | sort) \
+      <(printf "%s\n" "${!ghSHAmap[@]}"  | sort) || true)
+    missingInBBS=$(comm -13 \
+      <(printf "%s\n" "${!bbsSHAmap[@]}" | sort) \
+      <(printf "%s\n" "${!ghSHAmap[@]}"  | sort) || true)
     [[ -n "$missingInGH" ]]  && echo "[$(date)] Branches missing in GitHub: $(echo "$missingInGH" | tr '\n' ', ')"
     [[ -n "$missingInBBS" ]] && echo "[$(date)] Branches missing in Bitbucket: $(echo "$missingInBBS" | tr '\n' ', ')"
 
-    local commitsMatchAll="false" shasMatchAll="false"
-    if [[ "$ghExists" == "yes" ]]; then
+    # D — SHA comparison using data already in maps from Step B (zero extra API calls)
+    local shasMatchAll="false"
+    if [[ "$ghExists" == "yes" && "${#bbsSHAmap[@]}" -gt 0 && "${#ghSHAmap[@]}" -gt 0 ]]; then
       local common=()
-      mapfile -t common < <(comm -12 <(printf "%s\n" "${bbsBranches[@]}" | sort) <(printf "%s\n" "${ghBranches[@]}" | sort))
+      mapfile -t common < <(comm -12 \
+        <(printf "%s\n" "${!bbsSHAmap[@]}" | sort) \
+        <(printf "%s\n" "${!ghSHAmap[@]}"  | sort))
       if (( ${#common[@]} > 0 )); then
-        commitsMatchAll="true"
         shasMatchAll="true"
         for br in "${common[@]}"; do
-          local ghInfo bbsInfo
-          ghInfo="$(get_gh_commits_info "$ghOrg" "$ghRepo" "$br")"
-          local ghCount="${ghInfo%%,*}" ghSha="${ghInfo#*,}"
-
-          # Pass ghSha so BBS side can short-circuit when SHA already matches
-          bbsInfo="$(get_bbs_commits_info "$bbsProjectKey" "$bbsRepoSlug" "$br" "$ghSha")"
-          local bbsCount="${bbsInfo%%,*}" bbsSha="${bbsInfo#*,}"
-
-          local shaOk="false"; [[ "$ghSha" == "$bbsSha" ]] && shaOk="true"
+          local bbsSha="${bbsSHAmap[$br]:-}" ghSha="${ghSHAmap[$br]:-}"
+          local shaOk="false"
+          [[ -n "$ghSha" && "$ghSha" == "$bbsSha" ]] && shaOk="true"
           [[ "$shaOk" == "false" ]] && shasMatchAll="false"
-
-          local countOk="false"
-          if [[ "$bbsCount" == "SKIP" ]]; then
-            # SHA matched — commits are identical by definition
-            countOk="true"
-          else
-            [[ "$ghCount" == "$bbsCount" ]] && countOk="true"
-            [[ "$countOk" == "false" ]] && commitsMatchAll="false"
-            echo "[$(date)] Branch '$br': BBS Commits=${bbsCount} GitHub Commits=${ghCount} $(status_marker "$countOk")"
-          fi
           echo "[$(date)] Branch '$br': BBS SHA=${bbsSha} GitHub SHA=${ghSha} $(status_marker "$shaOk")"
         done
       fi
@@ -281,10 +230,10 @@ validate_repo() {
 
     echo "[$(date)] Validation complete for ${ghOrg}/${ghRepo}"
     # Write the CSV row as a sentinel line prefixed with CSV: so we can extract it
-    printf 'CSV:%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+    printf 'CSV:%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
       "$ghOrg" "$ghRepo" "$bbsProjectKey" "$bbsRepoSlug" \
       "$bbsBranchCount" "$ghBranchCount" "$branchCountOk" \
-      "$commitsMatchAll" "$shasMatchAll" "$gh_notes"
+      "$shasMatchAll" "$gh_notes"
   } > "$out_file" 2>&1
 }
 
@@ -320,18 +269,17 @@ echo "[$(date)] All validations from CSV completed" | tee -a "$LOG_FILE"
 # Markdown table (name matches the summary CSV for easy correlation)
 md="${summary_csv%.csv}.md"
 {
-  echo "| GitHub Repo | BBS Repo | Branch Count (BBS/GH) | Branch Count Match | All Commit Counts Match | All Latest SHAs Match | Notes |"
-  echo "|---|---|---:|---|---|---|---|"
+  echo "| GitHub Repo | BBS Repo | Branch Count (BBS/GH) | Branch Count Match | All SHAs Match | Notes |"
+  echo "|---|---|---:|---|---|---|"
   # Read rows directly from the CSV file (no pipe → no subshell surprises)
-  while IFS=',' read -r ghOrg ghRepo bbsKey bbsRepo bcB ghC bcOk ccOk shaOk notes; do
+  while IFS=',' read -r ghOrg ghRepo bbsKey bbsRepo bcB ghC bcOk shaOk notes; do
     # Skip empty lines
     [[ -z "$ghOrg" && -z "$ghRepo" ]] && continue
-    printf "| %s/%s | %s/%s | %s/%s | %s | %s | %s | %s |\n" \
+    printf "| %s/%s | %s/%s | %s/%s | %s | %s | %s |\n" \
       "$ghOrg" "$ghRepo" \
       "$bbsKey" "$bbsRepo" \
       "$bcB" "$ghC" \
       "$( [[ "$bcOk" == "true" ]] && echo "✅" || echo "❌" )" \
-      "$( [[ "$ccOk" == "true" ]] && echo "✅" || echo "❌" )" \
       "$( [[ "$shaOk" == "true" ]] && echo "✅" || echo "❌" )" \
       "${notes}"
   done < <(tail -n +2 "$summary_csv")
