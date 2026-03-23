@@ -269,8 +269,8 @@ echo "[$(date)] All validations from CSV completed" | tee -a "$LOG_FILE"
 # Markdown table (name matches the summary CSV for easy correlation)
 md="${summary_csv%.csv}.md"
 {
-  echo "| GitHub Repo | BBS Repo | Branch Count (BBS/GH) | Branch Count Match | All SHAs Match | Notes |"
-  echo "|---|---|---:|---|---|---|"
+  echo "| GitHub Repo | BBS Repo | Branches (BBS/GH) | Count ✓ | SHAs ✓ | Notes |"
+  echo "|-|-|-|-|-|-|"
   # Read rows directly from the CSV file (no pipe → no subshell surprises)
   while IFS=',' read -r ghOrg ghRepo bbsKey bbsRepo bcB ghC bcOk shaOk notes; do
     # Skip empty lines
