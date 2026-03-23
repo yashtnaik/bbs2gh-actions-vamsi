@@ -4,7 +4,7 @@
 [![Migration Tool](https://img.shields.io/badge/Tool-gh--bbs2gh-181717.svg)](https://github.com/github/gh-bbs2gh)
 [![Platform](https://img.shields.io/badge/Platform-Bash%20%7C%20PowerShell-blue.svg)](https://github.com/github/gh-bbs2gh)
 
-> A script-based toolkit for migrating repositories from **Bitbucket Server / Data Center** to **GitHub** at scale. Supports parallel migrations, automated validation, multiple storage backends, and GitHub Data Residency.
+> A GitHub Actions–based solution for migrating **Bitbucket Server** repositories to **GitHub** at scale. Supports parallel migrations, pre-migration checks, post-migration validation, multiple storage backends, and GitHub Data Residency.
 
 ---
 
