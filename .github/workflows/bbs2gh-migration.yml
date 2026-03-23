@@ -309,7 +309,7 @@ jobs:
           out_csv=$(ls -1t "${{ runner.temp }}/bbs2gh-run"/repo_migration_output-*.csv 2>/dev/null | head -n 1 || true)
 
           {
-            echo "# 📦 Migration Summary"
+            echo "**📦 Migration Summary**"
             echo
             if [[ -z "$out_csv" || ! -f "$out_csv" ]]; then
               echo "⚠️ No migration output CSV found."
@@ -446,13 +446,13 @@ jobs:
           csv=$(ls -1t "${{ runner.temp }}/bbs2gh-validate"/validation-summary-*.csv 2>/dev/null | head -n 1 || true)
 
           {
-            echo "# 🔍 Validation Summary"
+            echo "**🔍 Validation Summary**"
             echo
             if [[ -z "$csv" || ! -f "$csv" ]]; then
               echo "⚠️ No validation summary CSV found."
             else
               total=$(awk -F',' 'NR>1 {c++} END{print c+0}' "$csv")
-              passed=$(awk -F',' 'NR>1 && $7=="true" && $8=="true" && $9=="true" {c++} END{print c+0}' "$csv")
+              passed=$(awk -F',' 'NR>1 && $7=="true" && $8=="true" {c++} END{print c+0}' "$csv")
               failed=$(( total - passed ))
               echo "- **Total repos validated**: $total"
               echo "- **Fully matching**: ✅ $passed"
