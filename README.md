@@ -63,7 +63,7 @@ The [GitHub Enterprise Importer](https://github.com/github/gh-ado2gh) has the fo
 
 ## ⚙️ Prerequisites
 
-- To migrate a repository, you must be an organization owner for the destination organization in GitHub, or an organization owner must grant you the migrator role.
+- organization owner role for the destination organization in GitHub, or an organization owner must grant the migrator role.
 - You must also have required permissions and access to your Bitbucket Server instance:
   -  Admin or super admin permissions.
   -  If your Bitbucket Server instance runs Linux, SFTP access to the instance, using a supported SSH private key.
