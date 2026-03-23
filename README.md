@@ -46,8 +46,7 @@ The [GitHub Enterprise Importer](https://github.com/github/gh-ado2gh) has the fo
   - Commit metadata (authors, dates, messages, SHAs)
 
 - **Maximum Concurrency:**
-  - The migration stage enforces a hard cap of **20 concurrent migrations** per run.
-  - The default concurrency is **3**. Increase with `--max-concurrent` up to the limit.
+  - The default concurrency is **3**. Increase with `--max-concurrent` up to 5.
   - The actual repository migration runs on **GitHub's backend services**, not on the local machine. The script only polls migration status at regular intervals.
 
  - **Github Hosted runners timeout:**
