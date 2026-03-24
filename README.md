@@ -148,4 +148,12 @@ The workflow file is already present at `bbs2gh-migration.yml`. You only need to
 - **More repositories?** Update `repos.csv` and rerun the workflow
 - **Partial failures?** Fix the root cause, remove successfully migrated repos from `repos.csv`, and rerun workflow for remaining repos
 
+---
+
+## 📚 References
+
+1. GitHub CLI | [cli.github.com](https://cli.github.com)
+2. gh-bbs2gh extension | [github/gh-gei](https://github.com/github/gh-gei)
+3. gh-migration-monitor | [mona-actions/gh-migration-monitor](https://github.com/mona-actions/gh-migration-monitor)
+4. Migrate from Bitbucket Server (GitHub Docs) | [docs.github.com – BBS migrations](https://docs.github.com/en/migrations/using-github-enterprise-importer/migrating-from-bitbucket-server-to-github-enterprise-cloud/migrating-repositories-from-bitbucket-server-to-github-enterprise-cloud)
 
