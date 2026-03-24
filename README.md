@@ -29,7 +29,7 @@ This toolkit addresses those challenges through a staged, CSV-driven execution m
 ## ⚠️ Limitations
 
 - **Repository Migration Size Limits**
-The [GitHub Enterprise Importer](https://github.com/github/gh-ado2gh) has the following size limits:
+The [GitHub Enterprise Importer](https://github.com/github/gh-gei) has the following size limits:
 
 | Item | Maximum Size |
 |------|--------------|
