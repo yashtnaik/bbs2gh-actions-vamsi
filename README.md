@@ -86,9 +86,6 @@ The [GitHub Enterprise Importer](https://github.com/github/gh-ado2gh) has the fo
   - **Azure Blob:** `AZURE_STORAGE_CONNECTION_STRING`
   - **Github-owned:** 	*(nothing needed — automatic fallback)*
 
-
-
-
 ---
 
 ## 🔧 Initial Setup
@@ -110,112 +107,42 @@ The workflow file is already present at `bbs2gh-migration.yml`. You only need to
     - `TARGET_API_URL`: Only for GitHub Data Residency e.g. https://api.tenant.ghe.com
   - **Create the migration-approval Environment:** The migration job is gated by a required reviewer. Go to `Settings` → `Environments` → `New environment`, name it exactly: `migration-approval`
   - **Then add one or more Required reviewers** - the migration job will pause and wait for approval before running.
+  -  **Prepare `repos.csv`:** Edit repos.csv in the repository root with the repos you want to migrate
    
   
+      | Column | Description |
+      |--------|-------------|
+      | `project-key` | Bitbucket project key (e.g., `MYPROJ`) |
+      | `project-name` | Bitbucket project display name |
+      | `repo` | Bitbucket repository slug |
+      | `github_org` | Target GitHub organization |
+      | `github_repo` | Target GitHub repository name |
+      | `gh_repo_visibility` | `private`, `internal`, or `public` |
 
-
-Complete these steps before your first migration run:
-
-#### 1️⃣ 🔐 Authenticate the GitHub CLI
-
-```bash
-gh auth login
-# or export the token directly:
-export GH_PAT=<your-github-pat>
-```
-
----
-
-#### 2️⃣ 🧩 Install the BBS2GH Extension
-
-```bash
-gh extension install github/gh-bbs2gh
-```
-
-Verify the installation:
-
-```bash
-gh bbs2gh --version
-```
-
----
-
-#### 3️⃣ 🌍 Configure Environment Variables
-
-Set the following environment variables before running any script. See `bbs2gh-env-list.txt` for the complete reference.
-
-**Required for all stages:**
-
-```bash
-export GH_PAT=<github-personal-access-token>
-export BBS_BASE_URL=http://bitbucket.example.com:7990
-export SSH_USER=<ssh-username>
-export SSH_PRIVATE_KEY="$(cat ~/.ssh/id_rsa)"   # must be passphrase-free
-```
-
-**Bitbucket authentication (choose one):**
-
-```bash
-# Option A — PAT (recommended)
-export BBS_PAT=<bitbucket-personal-access-token>
-
-# Option B — Basic auth
-export BBS_AUTH_TYPE=Basic
-export BBS_USERNAME=<bitbucket-username>
-export BBS_PASSWORD=<bitbucket-password>
-```
-
-**Storage backend (choose one, or omit for GitHub-owned storage):**
-
-```bash
-# AWS S3
-export AWS_ACCESS_KEY_ID=...
-export AWS_SECRET_ACCESS_KEY=...
-export AWS_BUCKET_NAME=...
-export AWS_REGION=...
-
-# Azure Blob Storage
-export AZURE_STORAGE_CONNECTION_STRING=...
-```
-
-**Data Residency (optional):**
-
-```bash
-export TARGET_API_URL=https://api.tenant.ghe.com   # regional API endpoint
-```
-
----
-
-#### 4️⃣ 🗂️ Prepare `repos.csv`
-
-Edit `repos.csv` to define the repositories to migrate. The required columns are:
-
-| Column | Description |
-|--------|-------------|
-| `project-key` | Bitbucket project key (e.g., `MYPROJ`) |
-| `project-name` | Bitbucket project display name |
-| `repo` | Bitbucket repository slug |
-| `github_org` | Target GitHub organization |
-| `github_repo` | Target GitHub repository name |
-| `gh_repo_visibility` | `private`, `internal`, or `public` |
-
-**Example `repos.csv`:**
-```csv
-project-key,project-name,repo,github_org,github_repo,gh_repo_visibility
-MYPROJ,My Project,my-repo,my-github-org,my-repo-migrated,private
-PLATFORM,Platform Team,api-service,my-github-org,platform-api,private
-```
-
-> **💡 Tip:** For a first run, start with one or two non-critical repositories to validate your environment before migrating the full inventory.
 
 ---
 
 ## 🚀 Quick Start
 
 **Before you begin**, ensure you've completed the [Initial Setup](#-initial-setup):
-- ✅ GitHub CLI authenticated and `gh bbs2gh` extension installed
-- ✅ All required environment variables exported
-- ✅ `repos.csv` prepared with at least one repository
+- ✅ Repository secrets and variables configured
+- ✅ migration-approval environment created with reviewers
+- ✅ repos.csv updated and pushed to the default branch
+
+1. **Trigger the workflow:** Go to `Actions` → `bbs2gh-migration` → Run workflow and set your inputs, then click `Run workflow`.
+2. **Review Stage 0 - Pre-checks:** The Pre-check job runs automatically.
+      - Go to the job's Summary tab and review the pre-check table
+      - Check the uploaded artifact `bbs-prechecks-<run-id>` → `bbs_pr_validation_output-<timestamp>.csv`
+      - Ensure no repos show open PR warnings. If they do, merge/close those PRs in Bitbucket before proceeding.
+3. **Approve Stage 1 - Migration:** The Migration job pauses waiting for approval. Go to the workflow run and click `Review deployments` → `Approve to release it`.
+      - Monitor the live status in the job logs (QUEUED / IN PROGRESS / MIGRATED / FAILED).
+      - Once complete, download artifact migration-output-csv-<run-id> → repo_migration_output-<timestamp>.csv
+      - Confirm all repos show MIGRATED.
+4. **Review Stage 2 — Validation:**  The Validation job runs automatically after migration. Download artifact `validation-output-<run-id>` and check `validation-summary.md`:
+      - ✅ All entries show Matching for branches, commit counts, and latest SHAs.
+
+
+
 
 ---
 
