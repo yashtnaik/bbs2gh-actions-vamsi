@@ -72,7 +72,7 @@ The [GitHub Enterprise Importer](https://github.com/github/gh-gei) has the follo
 - **Bitbucket Server:**
   - **Bitbucket Server URL:** `BBS_BASE_URL` — e.g., http://bitbucket.example.com:7990
   - **Basic auth:**
-    - `BBS_AUTH_TYPE=Basic`
+    - `BBS_AUTH_TYPE` : `Basic`
     - `BBS_USERNAME`
     - `BBS_PASSWORD`
   - **SSH:**
