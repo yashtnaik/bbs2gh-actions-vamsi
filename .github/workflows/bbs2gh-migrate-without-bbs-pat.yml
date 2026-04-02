@@ -1,4 +1,4 @@
-name: bbs2gh-migration
+name: bbs2gh-migration-without-bbs-pat
 
 on:
   workflow_dispatch:
