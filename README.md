@@ -92,7 +92,7 @@ The workflow file is already present at `bbs2gh-migration.yml`. You only need to
 
 - **Add Repository Secrets:** Go to your GitHub repo → `Settings` → `Security` → `Secrets and variables` → `Actions` → `Secrets` → `New repository secret`, and add the following:
   - `GH_PAT`: GitHub PAT with `repo`, `admin:org`, and `workflow` scopes.
-  - `BBS_PAT`: Required for Pre and Post Migration validation stages.
+  - `BBS_PAT`: Required for Pre and Post Migration validation stages. scopes: `Project read` & `Repository Read`
   - `BBS_USERNAME`: Bitbucket username (if using Basic auth instead)
   - `BBS_PASSWORD`: Bitbucket password (if using Basic auth instead)
   - `SSH_USER`: SSH username for the Bitbucket Server host
