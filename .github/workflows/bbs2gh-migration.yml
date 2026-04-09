@@ -94,7 +94,7 @@ jobs:
         env:
           BBS_BASE_URL: ${{ env.BBS_BASE_URL }}
           BBS_PAT: ${{ secrets.BBS_PAT }}
-          BBS_AUTH_TYPE: ${{ secrets.BBS_AUTH_TYPE }}
+          BBS_AUTH_TYPE: ${{ vars.BBS_AUTH_TYPE }}
           BBS_USERNAME: ${{ secrets.BBS_USERNAME }}
           BBS_PASSWORD: ${{ secrets.BBS_PASSWORD }}
         run: |
@@ -481,7 +481,7 @@ jobs:
           GH_TOKEN: ''
           BBS_BASE_URL: ${{ env.BBS_BASE_URL }}
           BBS_PAT: ${{ secrets.BBS_PAT }}
-          BBS_AUTH_TYPE: ${{ secrets.BBS_AUTH_TYPE }}
+          BBS_AUTH_TYPE: ${{ vars.BBS_AUTH_TYPE }}
           BBS_USERNAME: ${{ secrets.BBS_USERNAME }}
           BBS_PASSWORD: ${{ secrets.BBS_PASSWORD }}
         run: |
